@@ -4,6 +4,7 @@ import android.os.Build
 import androidx.annotation.RequiresApi
 import com.oscaribarra.neoplanner.astro.time.Julian
 import com.oscaribarra.neoplanner.astro.time.SiderealTime
+import junit.framework.TestCase.assertEquals
 import java.time.Instant
 import kotlin.math.abs
 import org.junit.Test
