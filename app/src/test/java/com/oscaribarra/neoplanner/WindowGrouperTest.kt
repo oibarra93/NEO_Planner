@@ -1,10 +1,14 @@
-package com.oscaribarra.neoplanner.visibility
+package com.oscaribarra.neoplanner
 
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
-import org.junit.Test
+import com.oscaribarra.neoplanner.visibility.VisibilityConfig
+import com.oscaribarra.neoplanner.visibility.VisibilityEngine
+import com.oscaribarra.neoplanner.visibility.VisibilitySample
+import junit.framework.TestCase.assertEquals
 import java.time.ZoneId
 import java.time.ZonedDateTime
+import org.junit.Test
+import kotlin.test.DefaultAsserter.assertNotNull
+import kotlin.test.assertNotNull
 
 class WindowGrouperTest {
 

@@ -76,6 +76,9 @@ dependencies {
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
+
+    testImplementation("junit:junit:4.13.2")
+
     androidTestImplementation(libs.androidx.espresso.core)
     implementation(kotlin("test"))
 }
