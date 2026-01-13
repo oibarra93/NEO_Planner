@@ -13,9 +13,8 @@ import kotlinx.serialization.json.Json
 
 data class IpGeoResult(val lat: Double, val lon: Double)
 
-class IpGeoClient(
-    private val tokenProvider: suspend () -> String = { "" }
-) {
+class IpGeoClient(private val tokenProvider: suspend () -> String) {
+
     private val http = HttpClient(OkHttp) {
         install(ContentNegotiation) {
             json(Json { ignoreUnknownKeys = true })
@@ -23,8 +22,8 @@ class IpGeoClient(
     }
 
     suspend fun lookup(): IpGeoResult {
-        val token = tokenProvider()
-        // ipinfo: loc is "lat,lon"
+        val token = tokenProvider().trim()
+
         val resp: IpInfoResponse = http.get("https://ipinfo.io/json") {
             if (token.isNotBlank()) parameter("token", token)
             accept(ContentType.Application.Json)
@@ -32,10 +31,17 @@ class IpGeoClient(
 
         val loc = resp.loc?.trim().orEmpty()
         val parts = loc.split(",")
-        if (parts.size != 2) error("IP geolocation failed: missing/invalid loc field")
-        val lat = parts[0].toDouble()
-        val lon = parts[1].toDouble()
+
+        if (parts.size != 2) error("IP geolocation failed: invalid loc='$loc'")
+
+        val lat = parts[0].toDoubleOrNull() ?: error("IP geolocation failed: invalid lat='${parts[0]}'")
+        val lon = parts[1].toDoubleOrNull() ?: error("IP geolocation failed: invalid lon='${parts[1]}'")
+
         return IpGeoResult(lat, lon)
+    }
+
+    fun close() {
+        http.close()
     }
 
     @Serializable

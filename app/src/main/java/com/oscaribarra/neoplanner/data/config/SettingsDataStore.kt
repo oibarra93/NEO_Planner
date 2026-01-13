@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.first
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
 
@@ -31,27 +32,15 @@ class SettingsDataStore(private val context: Context) {
     }
 
     suspend fun getNeoWsApiKey(): String {
-        // quick sync-style getter (still suspend)
-        var value = ""
-        context.dataStore.data.map { it[Keys.NEOWS_API_KEY].orEmpty() }.collectOnce { value = it }
-        return value
+        return context.dataStore.data
+            .map { it[Keys.NEOWS_API_KEY].orEmpty() }
+            .first()
     }
 
     suspend fun getIpInfoToken(): String {
-        var value = ""
-        context.dataStore.data.map { it[Keys.IPINFO_TOKEN].orEmpty() }.collectOnce { value = it }
-        return value
+        return context.dataStore.data
+            .map { it[Keys.IPINFO_TOKEN].orEmpty() }
+            .first()
     }
-}
 
-private suspend inline fun <T> Flow<T>.collectOnce(crossinline block: (T) -> Unit) {
-    // simple helper to avoid bringing in first() import everywhere
-    var done = false
-    collect { v ->
-        if (!done) {
-            done = true
-            block(v)
-            return@collect
-        }
-    }
 }

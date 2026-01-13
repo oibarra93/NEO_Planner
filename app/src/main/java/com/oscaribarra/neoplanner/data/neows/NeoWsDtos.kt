@@ -23,11 +23,17 @@ data class NeoFeedItem(
 
 @Serializable
 data class CloseApproachData(
+    // Some NeoWs feed items omit close_approach_date_time and only provide close_approach_date
     @SerialName("close_approach_date_time")
-    val closeApproachDateTimeUtc: String,
+    val closeApproachDateTimeUtc: String? = null,
+
+    @SerialName("close_approach_date")
+    val closeApproachDateUtc: String? = null,
+
     @SerialName("miss_distance")
     val missDistance: MissDistance = MissDistance()
 )
+
 
 @Serializable
 data class MissDistance(

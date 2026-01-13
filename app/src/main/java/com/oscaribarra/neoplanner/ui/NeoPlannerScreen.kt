@@ -11,12 +11,18 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.oscaribarra.neoplanner.planner.PlanRequest
 import java.time.format.DateTimeFormatter
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+
 
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
+    val context = LocalContext.current
     val st by vm.state.collectAsState()
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -112,6 +118,25 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
                 Button(onClick = vm::fetchNeosNow, enabled = !st.isBusy) {
                     Text(if (st.isBusy) "Fetching…" else "Fetch NEOs (feed + details)")
                 }
+                val context = LocalContext.current
+
+                Button(
+                    onClick = {
+                        vm.planVisibility(
+                            appContext = context.applicationContext,
+                            req = PlanRequest(
+                                hoursAhead = st.hoursAhead,
+                                stepMinutes = 30,       // wire this to UI later
+                                minAltDeg = 20.0,        // wire this to UI later
+                                twilightLimitDeg = -12.0,// wire this to UI later
+                                maxNeos = st.maxNeos
+                            )
+                        )
+                    }
+                ) {
+                    Text("Plan Visibility")
+                }
+
 
                 st.error?.let { err ->
                     Text(err, color = MaterialTheme.colorScheme.error)
@@ -122,11 +147,63 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
         // Results List
         Card(Modifier.fillMaxSize()) {
             Column(Modifier.padding(12.dp)) {
-                Text("Results (NeoWs detail + orbit elements)", style = MaterialTheme.typography.titleMedium)
+                Text("Planned Visibility Results", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(8.dp))
+
+                if (st.planned.isEmpty()) {
+                    Text("No planned results yet. Tap “Plan Visibility”.")
+                } else {
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(st.planned) { item ->
+                            val neo = item.neo
+                            ElevatedCard {
+                                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(neo.name, style = MaterialTheme.typography.titleSmall)
+
+                                    Text("Hazardous: ${if (neo.isHazardous) "Yes" else "No"} | H: ${neo.hMagnitude ?: "—"}")
+                                    Text("Closest: ${neo.closestApproachAu ?: "—"} AU @ ${neo.closestApproachLocal?.format(timeFmt) ?: "—"}")
+
+                                    Text(
+                                        "Best window: ${
+                                            item.bestStartLocal?.format(timeFmt) ?: "—"
+                                        }  →  ${
+                                            item.bestEndLocal?.format(timeFmt) ?: "—"
+                                        }"
+                                    )
+
+                                    Text(
+                                        "Peak: ${
+                                            item.peakAltitudeDeg?.let { "%.2f°".format(it) } ?: "—"
+                                        } @ ${
+                                            item.peakTimeLocal?.format(timeFmt) ?: "—"
+                                        }"
+                                    )
+
+                                    Text(
+                                        "Pointing: Alt=${
+                                            item.peakAltitudeDeg?.let { "%.2f°".format(it) } ?: "—"
+                                        }  Az=${
+                                            item.peakAzimuthDeg?.let { "%.2f°".format(it) } ?: "—"
+                                        } ${item.peakCardinal ?: ""}"
+                                    )
+
+                                    item.pointingHint?.let { Text(it) }
+                                    Text("Windows found: ${item.visibleWindowCount}")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
+                Divider()
+                Spacer(Modifier.height(8.dp))
+
+                Text("Raw NeoWs Details (debug)", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
 
                 if (st.results.isEmpty()) {
-                    Text("No results yet.")
+                    Text("No raw results yet. Tap “Fetch NEOs”.")
                 } else {
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(st.results) { neo ->
@@ -148,5 +225,6 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
                 }
             }
         }
+
     }
 }

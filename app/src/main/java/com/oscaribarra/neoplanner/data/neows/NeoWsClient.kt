@@ -9,9 +9,8 @@ import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.json.Json
 
-class NeoWsClient(
-    private val apiKeyProvider: suspend () -> String
-) {
+class NeoWsClient(private val apiKeyProvider: suspend () -> String) {
+
     private val http = HttpClient(OkHttp) {
         install(ContentNegotiation) {
             json(Json {
@@ -21,8 +20,14 @@ class NeoWsClient(
         }
     }
 
+    private suspend fun requireApiKey(): String {
+        val key = apiKeyProvider().trim()
+        if (key.isBlank()) error("NeoWs API key is missing. Paste it and tap Save.")
+        return key
+    }
+
     suspend fun fetchFeed(startDate: String, endDate: String): NeoFeedResponse {
-        val key = apiKeyProvider().ifBlank { error("NeoWs API key is missing. Save it in settings first.") }
+        val key = requireApiKey()
 
         return http.get("https://api.nasa.gov/neo/rest/v1/feed") {
             url {
@@ -35,11 +40,15 @@ class NeoWsClient(
     }
 
     suspend fun fetchNeoDetail(neoId: String): NeoDetailResponse {
-        val key = apiKeyProvider().ifBlank { error("NeoWs API key is missing. Save it in settings first.") }
+        val key = requireApiKey()
 
         return http.get("https://api.nasa.gov/neo/rest/v1/neo/$neoId") {
             url { parameters.append("api_key", key) }
             accept(ContentType.Application.Json)
         }.body()
+    }
+
+    fun close() {
+        http.close()
     }
 }

@@ -3,6 +3,8 @@ package com.oscaribarra.neoplanner.ui
 import com.oscaribarra.neoplanner.data.model.NeoWithOrbit
 import com.oscaribarra.neoplanner.data.model.Observer
 import java.time.ZonedDateTime
+import com.oscaribarra.neoplanner.planner.PlannedNeoResult
+
 
 data class NeoPlannerUiState(
     val apiKey: String = "",
@@ -17,5 +19,8 @@ data class NeoPlannerUiState(
 
     val isBusy: Boolean = false,
     val results: List<NeoWithOrbit> = emptyList(),
-    val error: String? = null
-)
+    val error: String? = null,
+
+    val planned: List<PlannedNeoResult> = emptyList(),
+
+    )
