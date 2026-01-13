@@ -1,5 +1,7 @@
 package com.oscaribarra.neoplanner
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -7,6 +9,7 @@ import androidx.activity.compose.setContent
 import androidx.annotation.RequiresApi
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import com.oscaribarra.neoplanner.data.config.SettingsDataStore
@@ -23,6 +26,9 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+
+    private lateinit var vm: NeoPlannerViewModel
+
     @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,12 +42,14 @@ class MainActivity : ComponentActivity() {
         val repo = NeoRepository(neoWsClient)
 
         val factory = NeoPlannerViewModelFactory(settings, observerProvider, repo)
-        val vm: NeoPlannerViewModel =
-            ViewModelProvider(this, factory)[NeoPlannerViewModel::class.java]
 
-        // Optional debug: run fetch and then run NEO Alt/Az once results exist.
-        // Enable this after your API key Save flow is confirmed.
+        // ✅ IMPORTANT: assign to the property, do NOT create a local 'val vm'
+        vm = ViewModelProvider(this, factory)[NeoPlannerViewModel::class.java]
 
+        // Set initial permission status immediately
+        updatePermissionState()
+
+        // Optional debug: fetch and then compute first NEO Alt/Az once results exist.
         lifecycleScope.launch {
             vm.fetchNeosNow()
 
@@ -53,7 +61,6 @@ class MainActivity : ComponentActivity() {
                 }
         }
 
-
         setContent {
             MaterialTheme {
                 Surface(color = MaterialTheme.colorScheme.background) {
@@ -63,10 +70,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        // Optional cleanup if you want:
-        // ipGeo.close()
-        // neoWsClient.close()
+    override fun onResume() {
+        super.onResume()
+        updatePermissionState()
+    }
+
+    private fun updatePermissionState() {
+        val granted = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+
+        // safe because vm is initialized in onCreate before onResume is called
+        if (::vm.isInitialized) {
+            vm.setHasLocationPermission(granted)
+        }
     }
 }

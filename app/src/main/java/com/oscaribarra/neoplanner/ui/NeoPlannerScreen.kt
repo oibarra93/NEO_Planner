@@ -13,12 +13,17 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.oscaribarra.neoplanner.data.config.SettingsDataStore
 import com.oscaribarra.neoplanner.planner.PlanRequest
 import java.time.format.DateTimeFormatter
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Error
+
 
 private enum class ResultsMode { Planned, Raw }
 private enum class MainTab { Settings, Planner, Results }
@@ -157,10 +162,29 @@ private fun SettingsTab(
                 Text("Location / Permissions", style = MaterialTheme.typography.titleMedium)
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onRequestPermission, enabled = !st.isBusy) {
-                        Text("Request Location Permission")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = if (st.hasLocationPermission)
+                                Icons.Default.CheckCircle
+                            else
+                                Icons.Default.Error,
+                            contentDescription = null,
+                            tint = if (st.hasLocationPermission)
+                                MaterialTheme.colorScheme.primary
+                            else
+                                MaterialTheme.colorScheme.error
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = if (st.hasLocationPermission) "Granted" else "Not granted",
+                            color = if (st.hasLocationPermission)
+                                MaterialTheme.colorScheme.primary
+                            else
+                                MaterialTheme.colorScheme.error
+                        )
                     }
-                    Text(if (st.hasLocationPermission) "Granted" else "Not granted")
+
+
                 }
 
                 st.observer?.let { obs ->
