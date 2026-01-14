@@ -34,6 +34,7 @@ object Julian {
         return 2440587.5 + (unixSeconds + nanos * 1e-9) / SECONDS_PER_DAY
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     fun jdUtc(zdt: ZonedDateTime): Double = jdUtc(zdt.toInstant())
 
     /**
@@ -58,9 +59,11 @@ object Julian {
         return (jdTt - JD_J2000_TT) * SECONDS_PER_DAY
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     fun secondsSinceJ2000Tt(instant: Instant): Double =
         secondsSinceJ2000TtFromJdUtc(jdUtc(instant))
 
+    @RequiresApi(Build.VERSION_CODES.O)
     fun toLocalZdt(instant: Instant, zoneId: ZoneId = ZoneId.systemDefault()): ZonedDateTime =
         ZonedDateTime.ofInstant(instant, zoneId)
 }

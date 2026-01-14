@@ -9,6 +9,8 @@ import androidx.activity.compose.setContent
 import androidx.annotation.RequiresApi
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import com.oscaribarra.neoplanner.ui.theme.NeoPlannerTheme
+
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
@@ -62,12 +64,13 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            MaterialTheme {
-                Surface(color = MaterialTheme.colorScheme.background) {
-                    NeoPlannerScreen(vm)
-                }
+            NeoPlannerTheme(
+                useDynamicColor = false // set true if you want system-based dynamic colors
+            ) {
+                NeoPlannerScreen(vm)
             }
         }
+
     }
 
     override fun onResume() {

@@ -11,7 +11,7 @@ import java.nio.ByteOrder
  *  - SpkDafReader (Module 5) to get segment summaries
  *  - SpkType2Evaluator (Module 6) to evaluate type=2 Chebyshev position segments
  */
-class De442sEphemeris(private val file: File) : Ephemeris {
+class De442sEphemeris(file: File) : Ephemeris {
 
     private val raf = RandomAccessFile(file, "r")
 

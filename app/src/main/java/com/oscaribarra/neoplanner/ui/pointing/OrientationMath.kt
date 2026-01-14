@@ -40,9 +40,9 @@ object OrientationMath {
     fun rotationMatrixToEulerDeg(R: FloatArray): EulerDeg {
         val out = FloatArray(3)
         SensorManager.getOrientation(R, out)
-        val az = normalize360(radToDeg(out[0]).toDouble())
-        val pitch = radToDeg(out[1]).toDouble()
-        val roll = radToDeg(out[2]).toDouble()
+        val az = normalize360(radToDeg(out[0]))
+        val pitch = radToDeg(out[1])
+        val roll = radToDeg(out[2])
         return EulerDeg(
             azimuthDegMagnetic = az,
             pitchDeg = pitch,

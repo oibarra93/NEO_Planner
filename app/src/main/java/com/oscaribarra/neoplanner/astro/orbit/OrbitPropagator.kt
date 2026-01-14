@@ -1,18 +1,20 @@
 package com.oscaribarra.neoplanner.astro.orbit
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import com.oscaribarra.neoplanner.astro.orbit.OrbitalTransforms.Vec3Au
 import com.oscaribarra.neoplanner.astro.spk.Vec3Km
 import com.oscaribarra.neoplanner.astro.time.Julian
 import com.oscaribarra.neoplanner.astro.time.TimeScales
 import java.time.Instant
 import kotlin.math.pow
-import kotlin.math.sqrt
 
 object OrbitPropagator {
 
     /**
      * Convert Instant UTC -> JD(TDB) approximate using Module 4.
      */
+    @RequiresApi(Build.VERSION_CODES.O)
     fun jdTdbFromUtcApprox(instantUtc: Instant): Double {
         val jdUtc = Julian.jdUtc(instantUtc)
         return TimeScales.jdTdbFromJdUtcApprox(jdUtc)
@@ -38,6 +40,7 @@ object OrbitPropagator {
      * Heliocentric position in Equatorial J2000, km.
      * Returns null if orbit is non-elliptic (e >= 1).
      */
+    @RequiresApi(Build.VERSION_CODES.O)
     fun heliocentricEquatorialKm(el: OrbitElements, instantUtc: Instant): Vec3Km? {
         val jdTdb = jdTdbFromUtcApprox(instantUtc)
         val dtDays = jdTdb - el.epochJd

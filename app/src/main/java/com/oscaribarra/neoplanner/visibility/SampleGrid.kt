@@ -1,5 +1,7 @@
 package com.oscaribarra.neoplanner.visibility
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import java.time.Duration
 import java.time.ZonedDateTime
 
@@ -9,6 +11,7 @@ object SampleGrid {
      * Generates times from start..end inclusive (if aligned), stepping by config.stepMinutes.
      * If end isn't aligned, the last time will be < end (typical sampling behavior).
      */
+    @RequiresApi(Build.VERSION_CODES.O)
     fun generate(
         start: ZonedDateTime,
         hoursAhead: Int,

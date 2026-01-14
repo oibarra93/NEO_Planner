@@ -1,5 +1,7 @@
 package com.oscaribarra.neoplanner.astro.coords
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import com.oscaribarra.neoplanner.astro.spk.De442sEphemeris
 import com.oscaribarra.neoplanner.astro.spk.Vec3Km
 import com.oscaribarra.neoplanner.astro.time.Julian
@@ -11,6 +13,7 @@ object SunAltitude {
     /**
      * Convert UTC instant to ET seconds past J2000 (approx TDB seconds).
      */
+    @RequiresApi(Build.VERSION_CODES.O)
     fun etSecondsFromUtc(instantUtc: Instant): Double {
         val jdUtc = Julian.jdUtc(instantUtc)
         val jdTdb = TimeScales.jdTdbFromJdUtcApprox(jdUtc)
@@ -20,6 +23,7 @@ object SunAltitude {
     /**
      * Returns Sun topocentric Alt/Az at observer (degrees).
      */
+    @RequiresApi(Build.VERSION_CODES.O)
     fun sunAltAz(
         eph: De442sEphemeris,
         instantUtc: Instant,

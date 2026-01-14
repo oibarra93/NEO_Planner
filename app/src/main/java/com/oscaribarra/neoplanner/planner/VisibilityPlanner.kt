@@ -1,6 +1,8 @@
 package com.oscaribarra.neoplanner.planner
 
 import android.content.Context
+import android.os.Build
+import androidx.annotation.RequiresApi
 import com.oscaribarra.neoplanner.astro.coords.Pointing
 import com.oscaribarra.neoplanner.astro.coords.SunAltitude
 import com.oscaribarra.neoplanner.astro.coords.Topocentric
@@ -19,6 +21,7 @@ import java.time.ZonedDateTime
 
 class VisibilityPlanner(private val appContext: Context) {
 
+    @RequiresApi(Build.VERSION_CODES.O)
     suspend fun plan(
         observer: Observer,
         neos: List<NeoWithOrbit>,
@@ -114,6 +117,7 @@ class VisibilityPlanner(private val appContext: Context) {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun buildSampleInstants(startUtc: Instant, endUtc: Instant, stepSeconds: Long): List<Instant> {
         val out = ArrayList<Instant>(1024)
         var t = startUtc
@@ -128,6 +132,7 @@ class VisibilityPlanner(private val appContext: Context) {
      * Earth wrt Sun (km) in inertial equatorial frame:
      * EarthSun = EarthSSB - SunSSB
      */
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun earthWrtSunKm(eph: De442sEphemeris, tUtc: Instant): Vec3Km {
         val et = GeoVector.etSecondsFromUtc(tUtc)
         val earthSsb = eph.earthWrtSsb(et)
@@ -143,7 +148,7 @@ class VisibilityPlanner(private val appContext: Context) {
      * Build NEO geocentric vector using precomputed EarthSun.
      * NEOgeo = NEOhelio - EarthSun
      */
-    private suspend fun neoGeocentricFromEarthSun(
+    private fun neoGeocentricFromEarthSun(
         tracker: WindowTracker,
         instantUtc: Instant,
         earthSunKm: Vec3Km
@@ -168,7 +173,7 @@ class VisibilityPlanner(private val appContext: Context) {
 
         private val windows = ArrayList<WindowSummary>()
 
-        suspend fun propagateHeliocentricKm(tUtc: Instant): Vec3Km? {
+        fun propagateHeliocentricKm(tUtc: Instant): Vec3Km? {
             // Use Module 8 propagator directly (already used inside GeoVector in your debug),
             // but here we avoid recomputing EarthSun each time.
             return com.oscaribarra.neoplanner.astro.orbit.OrbitPropagator.heliocentricEquatorialKm(elements, tUtc)
@@ -205,6 +210,7 @@ class VisibilityPlanner(private val appContext: Context) {
             resetCurrent()
         }
 
+        @RequiresApi(Build.VERSION_CODES.O)
         fun buildResult(): PlannedNeoResult {
             // If still open, close at last known peak time + 0 (best effort)
             if (currentStartUtc != null) {

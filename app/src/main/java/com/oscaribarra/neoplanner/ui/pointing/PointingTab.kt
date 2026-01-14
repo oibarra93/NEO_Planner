@@ -1,5 +1,6 @@
 package com.oscaribarra.neoplanner.ui.pointing
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,7 +10,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Card
 import androidx.compose.material3.ElevatedCard
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -20,8 +20,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -51,20 +54,16 @@ fun PointingTab(
         errorState.value = null
         sampleState.value = null
 
-        val lat = obsLatDeg
-        val lon = obsLonDeg
-        val h = obsHeightMeters
-
-        if (lat == null || lon == null || h == null) {
+        if (obsLatDeg == null || obsLonDeg == null || obsHeightMeters == null) {
             errorState.value = "Observer not available yet. Fetch location first."
             return@LaunchedEffect
         }
 
         val tracker = OrientationTracker(context)
         tracker.samples(
-            obsLatDeg = lat,
-            obsLonDeg = lon,
-            obsHeightMeters = h
+            obsLatDeg = obsLatDeg,
+            obsLonDeg = obsLonDeg,
+            obsHeightMeters = obsHeightMeters
         ).collect { s ->
             sampleState.value = s
         }
@@ -142,7 +141,7 @@ private fun Header(onJumpToResults: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+        horizontalArrangement = Arrangement.Absolute.Left
     ) {
         Column {
             Text("Phone Pointing", style = MaterialTheme.typography.titleMedium)
@@ -151,11 +150,11 @@ private fun Header(onJumpToResults: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall
             )
         }}
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ){
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Absolute.Right
+    ) {
         OutlinedButton(onClick = onJumpToResults) {
             Text("Back to Results")
         }
@@ -227,13 +226,17 @@ private fun GuidanceCard(
     val statusText = if (aligned) "✅ Aligned" else OrientationMath.aimHint(dAz, dAlt)
     val statusTone = if (aligned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
 
-    // Convert deltas to 0..1 "closeness" meters for progress bars.
-    // Full scale: within 30° counts as "close"; clamp beyond that.
-    val azClose = closeness01(abs(dAz), fullScaleDeg = 30.0)
-    val altClose = closeness01(abs(dAlt), fullScaleDeg = 30.0)
+    // Centered bar tuning:
+    // - rangeDeg: full-scale offset in either direction (beyond this clamps to ends)
+    // - tolDeg: half-width of the "good" zone centered at 0
+    val azRangeDeg = 30.0
+    val altRangeDeg = 30.0
+    val azTolDeg = azTol
+    val altTolDeg = altTol
 
-    // Overall closeness from aim error; 0..1
-    val errClose = closeness01(err, fullScaleDeg = 20.0)
+    // Overall: use a smaller range so it feels more responsive
+    val errRangeDeg = 20.0
+    val errTolDeg = 3.0
 
     ElevatedCard {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -254,42 +257,156 @@ private fun GuidanceCard(
                 }
             }
 
-            // Az closeness
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Azimuth", style = MaterialTheme.typography.bodyMedium)
-                    Text("${abs(dAz).format1()}° off", style = MaterialTheme.typography.bodySmall)
-                }
-                LinearProgressIndicator(progress = azClose.toFloat(), modifier = Modifier.fillMaxWidth())
-            }
+            CenteredGaugeRow(
+                label = "Azimuth",
+                deltaDeg = dAz,
+                rangeDeg = azRangeDeg,
+                tolDeg = azTolDeg,
+                trailing = "${abs(dAz).format1()}° off"
+            )
 
-            // Alt closeness
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Altitude", style = MaterialTheme.typography.bodyMedium)
-                    Text("${abs(dAlt).format1()}° off", style = MaterialTheme.typography.bodySmall)
-                }
-                LinearProgressIndicator(progress = altClose.toFloat(), modifier = Modifier.fillMaxWidth())
-            }
+            CenteredGaugeRow(
+                label = "Altitude",
+                deltaDeg = dAlt,
+                rangeDeg = altRangeDeg,
+                tolDeg = altTolDeg,
+                trailing = "${abs(dAlt).format1()}° off"
+            )
 
-            // Overall error
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Overall", style = MaterialTheme.typography.bodyMedium)
-                    Text("${err.format1()}° error", style = MaterialTheme.typography.bodySmall)
-                }
-                LinearProgressIndicator(progress = errClose.toFloat(), modifier = Modifier.fillMaxWidth())
-            }
+            // Overall uses aim error (always positive)
+            CenteredGaugeRow(
+                label = "Overall",
+                deltaDeg = err,          // treat as "how far from center" to the right
+                rangeDeg = errRangeDeg,
+                tolDeg = errTolDeg,
+                trailing = "${err.format1()}° error",
+                // For error gauge: show center as "0", but error is magnitude only.
+                // We'll push marker right only (0.5..1.0) to avoid implying direction.
+                onlyPositive = true
+            )
         }
     }
 }
 
-/** closeness=1 when delta=0; closeness=0 when delta>=fullScaleDeg */
-private fun closeness01(deltaDeg: Double, fullScaleDeg: Double): Double {
-    val d = abs(deltaDeg)
-    val t = 1.0 - (d / fullScaleDeg)
-    return min(1.0, max(0.0, t))
+@Composable
+private fun CenteredGaugeRow(
+    label: String,
+    deltaDeg: Double,
+    rangeDeg: Double,
+    tolDeg: Double,
+    trailing: String,
+    onlyPositive: Boolean = false
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+            Text(trailing, style = MaterialTheme.typography.bodySmall)
+        }
+
+        CenteredIndicatorBar(
+            valueDeg = deltaDeg,
+            rangeDeg = rangeDeg,
+            tolDeg = tolDeg,
+            onlyPositive = onlyPositive,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
 }
+
+/**
+ * A centered bar where:
+ * - center (x=0.5) is the target
+ * - marker moves left/right based on signed valueDeg
+ * - a tolerance window is drawn around the center
+ *
+ * If onlyPositive=true, we treat valueDeg as a magnitude and only move marker from center to the right.
+ */
+@Composable
+private fun CenteredIndicatorBar(
+    valueDeg: Double,
+    rangeDeg: Double,
+    tolDeg: Double,
+    onlyPositive: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val v = if (onlyPositive) abs(valueDeg) else valueDeg
+
+    // Map degrees to [0..1] with center at 0.5
+    val raw = if (onlyPositive) {
+        // 0..range maps to 0.5..1.0
+        0.5 + (clamp(v, 0.0, rangeDeg) / (2.0 * rangeDeg))
+    } else {
+        0.5 + (clamp(v, -rangeDeg, rangeDeg) / (2.0 * rangeDeg))
+    }
+    val pos = clamp(raw, 0.0, 1.0).toFloat()
+
+    val inTol = if (onlyPositive) abs(v) <= tolDeg else abs(v) <= tolDeg
+
+    val trackColor = MaterialTheme.colorScheme.surfaceVariant
+    val goodZoneColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+    val centerLineColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+    val markerColor = if (inTol) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+    val markerStroke = MaterialTheme.colorScheme.onSurface
+
+    Canvas(
+        modifier = modifier
+            .height(18.dp)
+    ) {
+        val w = size.width
+        val h = size.height
+
+        // Track
+        drawRoundRect(
+            color = trackColor,
+            topLeft = Offset(0f, 0f),
+            size = Size(w, h),
+            cornerRadius = CornerRadius(h / 2f, h / 2f)
+        )
+
+        // Good zone band around center
+        val tol = clamp(tolDeg, 0.0, rangeDeg)
+        val halfBand = (tol / (2.0 * rangeDeg)).toFloat() * w
+        val cx = 0.5f * w
+        val bandLeft = (cx - halfBand).coerceAtLeast(0f)
+        val bandRight = (cx + halfBand).coerceAtMost(w)
+
+        drawRoundRect(
+            color = goodZoneColor,
+            topLeft = Offset(bandLeft, 0f),
+            size = Size(bandRight - bandLeft, h),
+            cornerRadius = CornerRadius(h / 2f, h / 2f)
+        )
+
+        // Center line
+        drawLine(
+            color = centerLineColor,
+            start = Offset(cx, 2f),
+            end = Offset(cx, h - 2f),
+            strokeWidth = 3f
+        )
+
+        // Marker dot
+        val mx = pos * w
+        val r = (h * 0.42f)
+        drawCircle(
+            color = markerColor,
+            radius = r,
+            center = Offset(mx, h / 2f)
+        )
+        // subtle outline for contrast
+        drawCircle(
+            color = markerStroke.copy(alpha = 0.35f),
+            radius = r,
+            center = Offset(mx, h / 2f),
+            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f)
+        )
+    }
+}
+
+private fun clamp(v: Double, lo: Double, hi: Double): Double = min(hi, max(lo, v))
 
 private fun formatSignedDeg(v: Double): String {
     val sign = if (v >= 0) "+" else "−"

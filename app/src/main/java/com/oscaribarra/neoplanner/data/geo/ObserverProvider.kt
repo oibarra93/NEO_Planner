@@ -3,6 +3,8 @@ package com.oscaribarra.neoplanner.data.geo
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.LocationServices
 import com.oscaribarra.neoplanner.data.model.Observer
@@ -12,6 +14,7 @@ class ObserverProvider(
     private val context: Context,
     private val ipGeoClient: IpGeoClient
 ) {
+    @RequiresApi(Build.VERSION_CODES.O)
     suspend fun getObserver(): Observer {
         val tz = ZoneId.systemDefault().id
 
@@ -21,7 +24,7 @@ class ObserverProvider(
 
         if (hasFine) {
             val fused = LocationServices.getFusedLocationProviderClient(context)
-            val loc = fused.lastLocationOrNull()
+            val loc = fused.lastLocationOrNull(context)
             if (loc != null) {
                 val elev = if (loc.hasAltitude()) loc.altitude else 0.0
                 return Observer(

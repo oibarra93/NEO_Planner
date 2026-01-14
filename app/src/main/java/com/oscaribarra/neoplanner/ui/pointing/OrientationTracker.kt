@@ -6,8 +6,10 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Build
 import android.view.Surface
 import android.view.WindowManager
+import androidx.annotation.RequiresApi
 import java.time.Instant
 import kotlin.math.asin
 import kotlin.math.atan2
@@ -69,6 +71,7 @@ class OrientationTracker(context: Context) {
         val camDevice = floatArrayOf(0f, 0f, -1f)
 
         val listener = object : SensorEventListener {
+            @RequiresApi(Build.VERSION_CODES.O)
             override fun onSensorChanged(event: SensorEvent) {
                 val now = Instant.now()
 
@@ -107,10 +110,9 @@ class OrientationTracker(context: Context) {
                  * alt = asin(up) in radians           -> degrees [-90..+90]
                  */
                 val east = camWorldX
-                val north = camWorldY
                 val up = camWorldZ.coerceIn(-1.0, 1.0)
 
-                val azRad = atan2(east, north)
+                val azRad = atan2(east, camWorldY)
                 val altRad = asin(up)
 
                 val trueAz = normalize360(Math.toDegrees(azRad))

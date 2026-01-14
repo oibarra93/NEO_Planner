@@ -164,6 +164,7 @@ class NeoPlannerViewModel(
     // -------------------------
     // Debug Alt/Az (NEO)
     // -------------------------
+    @RequiresApi(Build.VERSION_CODES.O)
     fun debugFirstNeoAltAz(appContext: Context) {
         val obs = state.value.observer ?: return
         val first = state.value.results.firstOrNull() ?: return
@@ -177,6 +178,7 @@ class NeoPlannerViewModel(
         )
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     fun debugNeoAltAz(
         appContext: Context,
         orbit: com.oscaribarra.neoplanner.data.model.OrbitElements,

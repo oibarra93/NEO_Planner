@@ -1,5 +1,7 @@
 package com.oscaribarra.neoplanner.data.repo
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import com.oscaribarra.neoplanner.data.model.NeoCandidate
 import com.oscaribarra.neoplanner.data.model.NeoWithOrbit
 import com.oscaribarra.neoplanner.data.model.OrbitElements
@@ -8,7 +10,6 @@ import com.oscaribarra.neoplanner.data.neows.NeoFeedItem
 import java.time.Instant
 import java.time.ZoneId
 import java.time.ZonedDateTime
-import java.time.format.DateTimeFormatter
 
 class NeoRepository(
     private val neoWs: NeoWsClient
@@ -28,6 +29,7 @@ class NeoRepository(
     /**
      * Fetch details for top N candidates (or fewer) and parse orbital elements.
      */
+    @RequiresApi(Build.VERSION_CODES.O)
     suspend fun fetchDetails(
         candidates: List<NeoCandidate>,
         maxNeos: Int,
@@ -81,6 +83,7 @@ class NeoRepository(
         )
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun parseUtcIsoToLocal(utcIso: String, zoneId: ZoneId): ZonedDateTime {
         // NeoWs close_approach_date_time is ISO8601 in UTC, e.g. "2026-01-12T03:12Z"
         val instant = Instant.parse(utcIso)

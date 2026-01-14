@@ -1,9 +1,17 @@
+@file:Suppress("LocalVariableName", "LocalVariableName", "LocalVariableName", "LocalVariableName",
+    "LocalVariableName", "LocalVariableName", "LocalVariableName"
+)
+
 package com.oscaribarra.neoplanner.astro.orbit
 
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 
+@Suppress("LocalVariableName", "LocalVariableName", "LocalVariableName", "LocalVariableName",
+    "LocalVariableName", "LocalVariableName", "LocalVariableName", "LocalVariableName",
+    "LocalVariableName", "LocalVariableName"
+)
 object KeplerSolver {
 
     /**

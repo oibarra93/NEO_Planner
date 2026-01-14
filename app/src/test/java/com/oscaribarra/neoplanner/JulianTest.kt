@@ -1,7 +1,5 @@
 package com.oscaribarra.neoplanner
 
-import android.os.Build
-import androidx.annotation.RequiresApi
 import com.oscaribarra.neoplanner.astro.time.Julian
 import com.oscaribarra.neoplanner.astro.time.SiderealTime
 import junit.framework.TestCase.assertEquals

@@ -1,7 +1,6 @@
 package com.oscaribarra.neoplanner.astro.time
 
 import kotlin.math.PI
-import kotlin.math.floor
 
 /**
  * Sidereal time utilities.

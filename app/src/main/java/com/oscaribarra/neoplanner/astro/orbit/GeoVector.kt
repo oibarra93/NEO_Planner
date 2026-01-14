@@ -1,5 +1,7 @@
 package com.oscaribarra.neoplanner.astro.orbit
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import com.oscaribarra.neoplanner.astro.spk.De442sEphemeris
 import com.oscaribarra.neoplanner.astro.spk.Vec3Km
 import com.oscaribarra.neoplanner.astro.time.Julian
@@ -11,6 +13,7 @@ object GeoVector {
     /**
      * UTC -> ET seconds past J2000 (approx TDB), consistent with Module 7 SunAltitude.
      */
+    @RequiresApi(Build.VERSION_CODES.O)
     fun etSecondsFromUtc(instantUtc: Instant): Double {
         val jdUtc = Julian.jdUtc(instantUtc)
         val jdTdb = TimeScales.jdTdbFromJdUtcApprox(jdUtc)
@@ -28,6 +31,7 @@ object GeoVector {
      *
      * Returns null if propagation fails (e >= 1 etc).
      */
+    @RequiresApi(Build.VERSION_CODES.O)
     fun neoGeocentricEciKm(
         eph: De442sEphemeris,
         el: OrbitElements,

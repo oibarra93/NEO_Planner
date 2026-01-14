@@ -47,12 +47,11 @@ object OrbitalTransforms {
 
         val m31 = sw * si
         val m32 = cw * si
-        val m33 = ci
 
         return Vec3Au(
             x = m11 * rPf.x + m12 * rPf.y + m13 * rPf.z,
             y = m21 * rPf.x + m22 * rPf.y + m23 * rPf.z,
-            z = m31 * rPf.x + m32 * rPf.y + m33 * rPf.z
+            z = m31 * rPf.x + m32 * rPf.y + ci * rPf.z
         )
     }
 

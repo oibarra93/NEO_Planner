@@ -4,7 +4,6 @@ import java.io.File
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import kotlin.math.floor
 
 /**
  * Minimal NAIF DAF/SPK reader:

@@ -1,13 +1,21 @@
 package com.oscaribarra.neoplanner.ui
 
 import android.Manifest
-import androidx.compose.ui.platform.LocalUriHandler
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -15,11 +23,32 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Tab
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import com.oscaribarra.neoplanner.planner.PlanRequest
 import com.oscaribarra.neoplanner.planner.PlannedNeoResult
@@ -75,7 +104,7 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            TabRow(selectedTabIndex = tab.ordinal) {
+            PrimaryTabRow(selectedTabIndex = tab.ordinal)   {
                 Tab(
                     selected = tab == MainTab.Settings,
                     onClick = { tab = MainTab.Settings },
@@ -173,7 +202,7 @@ private fun SettingsTab(
     onUpdateKey: (String) -> Unit
 ) {
     val scroll = rememberScrollState()
-    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+    val uriHandler = LocalUriHandler.current
 
     // NASA API signup page (NeoWs uses the same API key)
     val apiKeyUrl = "https://api.nasa.gov/"
@@ -269,7 +298,7 @@ private fun SettingsTab(
 private fun PlannerTab(
     st: NeoPlannerUiState,
     timeFmt: DateTimeFormatter,
-    selected: com.oscaribarra.neoplanner.planner.PlannedNeoResult?,
+    selected: PlannedNeoResult?,
     onFetch: () -> Unit,
     onPlan: () -> Unit,
     onUpdateHoursAhead: (String) -> Unit,
@@ -365,8 +394,6 @@ private fun PlannerTab(
     }
 }
 
-private enum class ResultsSort { Default, DistanceAu, PeakTime }
-
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -378,10 +405,81 @@ private fun ResultsTab(
     onPointNeo: (String) -> Unit,
     onOpenNeoDetails: (String) -> Unit
 ) {
+    // --- Sort "enums" (cannot be enum inside a function) ---
+    val PLANNED_SORT_DISTANCE = "distance"
+    val PLANNED_SORT_PEAK_TIME = "peak_time"
+    val RAW_SORT_DISTANCE = "distance"
+    val RAW_SORT_CLOSEST_TIME = "closest_time"
+
+    var plannedSort by remember { mutableStateOf(PLANNED_SORT_DISTANCE) }
+    var rawSort by remember { mutableStateOf(RAW_SORT_DISTANCE) }
+
     var sheetNeoId by remember { mutableStateOf<String?>(null) }
     var sheetNeoName by remember { mutableStateOf<String?>(null) }
 
-    // Bottom sheet (shows when sheetNeoId != null)
+    // --- Helpers ---
+    fun auAsDoubleOrInf(value: Any?): Double {
+        return when (value) {
+            null -> Double.POSITIVE_INFINITY
+            is Double -> if (value.isFinite()) value else Double.POSITIVE_INFINITY
+            is Float -> value.toDouble().let { if (it.isFinite()) it else Double.POSITIVE_INFINITY }
+            is Int -> value.toDouble()
+            is Long -> value.toDouble()
+            is String -> value.toDoubleOrNull() ?: Double.POSITIVE_INFINITY
+            else -> Double.POSITIVE_INFINITY
+        }
+    }
+
+    // --- Sorted views ---
+    val plannedSorted = remember(st.planned, plannedSort) {
+        val farFuture = java.time.ZonedDateTime.now().plusYears(100)
+
+        when (plannedSort) {
+            PLANNED_SORT_DISTANCE ->
+                st.planned.sortedWith(
+                    compareBy<PlannedNeoResult> { auAsDoubleOrInf(it.neo.closestApproachAu) }
+                        .thenBy { it.peakTimeLocal ?: farFuture }
+                        .thenBy { it.neo.name }
+                )
+
+            PLANNED_SORT_PEAK_TIME ->
+                st.planned.sortedWith(
+                    compareBy<PlannedNeoResult> { it.peakTimeLocal ?: farFuture }
+                        .thenBy { auAsDoubleOrInf(it.neo.closestApproachAu) }
+                        .thenBy { it.neo.name }
+                )
+
+            else -> st.planned
+        }
+    }
+
+    val rawSorted = remember(st.results, rawSort) {
+        val farFuture = java.time.ZonedDateTime.now().plusYears(100)
+
+        when (rawSort) {
+            RAW_SORT_DISTANCE ->
+                st.results.sortedWith(
+                    compareBy<com.oscaribarra.neoplanner.data.model.NeoWithOrbit> {
+                        auAsDoubleOrInf(it.closestApproachAu)
+                    }
+                        .thenBy { it.closestApproachLocal ?: farFuture }
+                        .thenBy { it.name }
+                )
+
+            RAW_SORT_CLOSEST_TIME ->
+                st.results.sortedWith(
+                    compareBy<com.oscaribarra.neoplanner.data.model.NeoWithOrbit> {
+                        it.closestApproachLocal ?: farFuture
+                    }
+                        .thenBy { auAsDoubleOrInf(it.closestApproachAu) }
+                        .thenBy { it.name }
+                )
+
+            else -> st.results
+        }
+    }
+
+    // --- Bottom sheet (shows when sheetNeoId != null) ---
     if (sheetNeoId != null) {
         val id = sheetNeoId!!
         val name = sheetNeoName ?: id
@@ -414,7 +512,6 @@ private fun ResultsTab(
 
                 OutlinedButton(
                     onClick = {
-                        // Keep sheet open or close it — your preference. Closing feels nicer.
                         sheetNeoId = null
                         sheetNeoName = null
                         onOpenNeoDetails(id)
@@ -424,19 +521,32 @@ private fun ResultsTab(
                     Text("View NASA/JPL Details")
                 }
 
+                TextButton(
+                    onClick = {
+                        sheetNeoId = null
+                        sheetNeoName = null
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Close")
+                }
+
                 Spacer(Modifier.height(6.dp))
             }
         }
     }
 
+    // --- UI ---
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(12.dp)
     ) {
+        // Title + mode chips
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 when (mode) {
@@ -462,6 +572,49 @@ private fun ResultsTab(
 
         Spacer(Modifier.height(8.dp))
 
+        // Sort row (depends on mode)
+        Card {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Sort:", style = MaterialTheme.typography.labelLarge)
+
+                when (mode) {
+                    ResultsMode.Planned -> {
+                        FilterChip(
+                            selected = plannedSort == PLANNED_SORT_DISTANCE,
+                            onClick = { plannedSort = PLANNED_SORT_DISTANCE },
+                            label = { Text("Distance (AU)") }
+                        )
+                        FilterChip(
+                            selected = plannedSort == PLANNED_SORT_PEAK_TIME,
+                            onClick = { plannedSort = PLANNED_SORT_PEAK_TIME },
+                            label = { Text("Peak time") }
+                        )
+                    }
+
+                    ResultsMode.Raw -> {
+                        FilterChip(
+                            selected = rawSort == RAW_SORT_DISTANCE,
+                            onClick = { rawSort = RAW_SORT_DISTANCE },
+                            label = { Text("Distance (AU)") }
+                        )
+                        FilterChip(
+                            selected = rawSort == RAW_SORT_CLOSEST_TIME,
+                            onClick = { rawSort = RAW_SORT_CLOSEST_TIME },
+                            label = { Text("Closest time") }
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
         when (mode) {
             ResultsMode.Planned -> {
                 if (st.planned.isEmpty()) {
@@ -471,7 +624,7 @@ private fun ResultsTab(
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(st.planned) { item ->
+                        items(plannedSorted) { item ->
                             ElevatedCard(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -507,7 +660,7 @@ private fun ResultsTab(
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(st.results) { neo ->
+                        items(rawSorted) { neo ->
                             ElevatedCard(
                                 modifier = Modifier
                                     .fillMaxWidth()

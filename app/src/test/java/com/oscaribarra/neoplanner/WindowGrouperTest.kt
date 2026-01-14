@@ -7,7 +7,6 @@ import junit.framework.TestCase.assertEquals
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import org.junit.Test
-import kotlin.test.DefaultAsserter.assertNotNull
 import kotlin.test.assertNotNull
 
 class WindowGrouperTest {

@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -9,9 +11,8 @@ plugins {
 
 android {
     namespace = "com.oscaribarra.neoplanner"
-    compileSdk {
-        version = release(36)
-    }
+
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.oscaribarra.neoplanner"
@@ -41,51 +42,59 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
-    kotlinOptions {
-        jvmTarget = "11"
+
+    // ✅ New DSL (replaces kotlinOptions { jvmTarget = "11" })
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_11)
+        }
     }
 }
 
 dependencies {
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.appcompat)
-    implementation(libs.material)
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-
-
-    // Compose
-    implementation("androidx.activity:activity-compose:1.9.3")
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.ui:ui-tooling-preview")
-    debugImplementation("androidx.compose.ui:ui-tooling")
     val composeBom = platform("androidx.compose:compose-bom:2025.12.00")
     implementation(composeBom)
     androidTestImplementation(composeBom)
-    implementation("androidx.compose.ui:ui-tooling-preview")
-    debugImplementation("androidx.compose.ui:ui-tooling")
-    implementation("androidx.compose.material:material-icons-extended")
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.appcompat)
+    implementation(libs.material)
+    implementation(libs.okhttp)
+
+
+    // Compose
+    implementation(libs.androidx.ui)
+    implementation(libs.androidx.material3)
+    implementation(libs.androidx.ui.tooling.preview)
+    debugImplementation(libs.androidx.ui.tooling)
+
+    implementation(libs.ui.tooling.preview)
+    debugImplementation(libs.ui.tooling)
+    implementation(libs.androidx.material.icons.extended)
+
+    // Activity + Compose (THIS FIXES setContent + permission launcher)
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.activity.ktx)
 
     // ✅ Coroutines
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation(libs.kotlinx.coroutines.android)
 
     // ✅ DataStore (Preferences)
-    implementation("androidx.datastore:datastore-preferences:1.1.1")
+    implementation("androidx.datastore:datastore-preferences:1.2.0")
 
     // ✅ Location (Fused provider)
-    implementation("com.google.android.gms:play-services-location:21.3.0")
+    implementation(libs.play.services.location)
 
     // ✅ Ktor + Kotlinx Serialization JSON
-    implementation("io.ktor:ktor-client-okhttp:2.3.12")
-    implementation("io.ktor:ktor-client-content-negotiation:2.3.12")
-    implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.12")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    implementation(libs.ktor.client.okhttp)
+    implementation(libs.ktor.client.content.negotiation)
+    implementation(libs.ktor.serialization.kotlinx.json)
+    implementation(libs.kotlinx.serialization.json)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
 
-    testImplementation("junit:junit:4.13.2")
+    testImplementation(libs.junit)
 
     androidTestImplementation(libs.androidx.espresso.core)
-    implementation(kotlin("test"))
+    testImplementation(kotlin("test"))
 }

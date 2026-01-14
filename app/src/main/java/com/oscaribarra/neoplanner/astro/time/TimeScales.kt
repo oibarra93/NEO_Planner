@@ -1,6 +1,5 @@
 package com.oscaribarra.neoplanner.astro.time
 
-import kotlin.math.cos
 import kotlin.math.sin
 
 /**

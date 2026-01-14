@@ -1,5 +1,7 @@
 package com.oscaribarra.neoplanner.astro.coords
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import com.oscaribarra.neoplanner.astro.spk.Vec3Km
 import com.oscaribarra.neoplanner.astro.time.Julian
 import com.oscaribarra.neoplanner.astro.time.SiderealTime
@@ -19,6 +21,7 @@ object Frames {
      *   y_ecef = -sinθ*x_eci + cosθ*y_eci
      *   z_ecef =  z_eci
      */
+    @RequiresApi(Build.VERSION_CODES.O)
     fun eciToEcef(eciKm: Vec3Km, instantUtc: Instant): Vec3Km {
         val jdUtc = Julian.jdUtc(instantUtc)
         val theta = SiderealTime.gmstRadFromJdUtc(jdUtc)
@@ -52,20 +55,17 @@ object Frames {
 
         // ENU basis vectors (ECEF)
         val eastX = -sinLon
-        val eastY = cosLon
         val eastZ = 0.0
 
         val northX = -sinLat * cosLon
         val northY = -sinLat * sinLon
-        val northZ = cosLat
 
         val upX = cosLat * cosLon
         val upY = cosLat * sinLon
-        val upZ = sinLat
 
-        val e = rhoEcefKm.x * eastX + rhoEcefKm.y * eastY + rhoEcefKm.z * eastZ
-        val n = rhoEcefKm.x * northX + rhoEcefKm.y * northY + rhoEcefKm.z * northZ
-        val u = rhoEcefKm.x * upX + rhoEcefKm.y * upY + rhoEcefKm.z * upZ
+        val e = rhoEcefKm.x * eastX + rhoEcefKm.y * cosLon + rhoEcefKm.z * eastZ
+        val n = rhoEcefKm.x * northX + rhoEcefKm.y * northY + rhoEcefKm.z * cosLat
+        val u = rhoEcefKm.x * upX + rhoEcefKm.y * upY + rhoEcefKm.z * sinLat
 
         return Triple(e, n, u)
     }
@@ -81,6 +81,7 @@ object Frames {
      *  - ENU projection
      *  - Alt/Az
      */
+    @RequiresApi(Build.VERSION_CODES.O)
     fun altAzFromGeocentricEci(
         geocentricEciKm: Vec3Km,
         instantUtc: Instant,
