@@ -155,6 +155,12 @@ class NeoPlannerViewModel(
         }
     }
 
+    fun getSelectedPlanned(): com.oscaribarra.neoplanner.planner.PlannedNeoResult? {
+        val id = _state.value.selectedNeoId ?: return null
+        return _state.value.planned.firstOrNull { it.neo.id == id }
+    }
+
+
     // -------------------------
     // Debug Alt/Az (NEO)
     // -------------------------

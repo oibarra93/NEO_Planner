@@ -1,6 +1,7 @@
 package com.oscaribarra.neoplanner.ui
 
 import android.Manifest
+import androidx.compose.ui.platform.LocalUriHandler
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -11,28 +12,32 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.oscaribarra.neoplanner.data.config.SettingsDataStore
 import com.oscaribarra.neoplanner.planner.PlanRequest
+import com.oscaribarra.neoplanner.planner.PlannedNeoResult
+import com.oscaribarra.neoplanner.ui.pointing.PointingTab
+import com.oscaribarra.neoplanner.ui.pointing.TargetAltAz
 import java.time.format.DateTimeFormatter
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Error
-
 
 private enum class ResultsMode { Planned, Raw }
-private enum class MainTab { Settings, Planner, Results }
+private enum class MainTab { Settings, Planner, Results, Pointing }
+
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
     val st by vm.state.collectAsState()
     val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
+
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -43,8 +48,23 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
     var tab by remember { mutableStateOf(MainTab.Planner) }
     var mode by remember { mutableStateOf(ResultsMode.Planned) }
 
-    val selected = remember(st.planned, st.selectedNeoId) {
+    // Selected planned result (if any)
+    val selectedPlanned = remember(st.planned, st.selectedNeoId) {
         st.planned.firstOrNull { it.neo.id == st.selectedNeoId }
+    }
+
+    // Build target for PointingTab if we have peak Alt/Az
+    val pointingTarget: TargetAltAz? = remember(selectedPlanned) {
+        val p = selectedPlanned ?: return@remember null
+        val alt = p.peakAltitudeDeg ?: return@remember null
+        val az = p.peakAzimuthDeg ?: return@remember null
+
+        val whenStr = p.peakTimeLocal?.format(timeFmt) ?: "peak time"
+        TargetAltAz(
+            label = "${p.neo.name} • $whenStr",
+            altitudeDeg = alt,
+            azimuthDegTrue = az
+        )
     }
 
     Scaffold(
@@ -71,6 +91,11 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
                     onClick = { tab = MainTab.Results },
                     text = { Text("Results") }
                 )
+                Tab(
+                    selected = tab == MainTab.Pointing,
+                    onClick = { tab = MainTab.Pointing }, // ✅ no item here
+                    text = { Text("Pointing") }
+                )
             }
 
             when (tab) {
@@ -85,7 +110,7 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
                 MainTab.Planner -> PlannerTab(
                     st = st,
                     timeFmt = timeFmt,
-                    selected = selected,
+                    selected = selectedPlanned,
                     onFetch = vm::fetchNeosNow,
                     onPlan = {
                         vm.planVisibility(
@@ -98,7 +123,6 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
                                 maxNeos = st.maxNeos
                             )
                         )
-                        // Switch to Results tab automatically so you see output
                         tab = MainTab.Results
                     },
                     onUpdateHoursAhead = vm::updateHoursAhead,
@@ -113,12 +137,32 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
                     timeFmt = timeFmt,
                     mode = mode,
                     onModeChange = { mode = it },
-                    onSelectNeo = vm::selectNeo
+                    onPointNeo = { id ->
+                        vm.selectNeo(id)
+                        tab = MainTab.Pointing
+                    },
+                    onOpenNeoDetails = { id ->
+                        // SBDB lookup works well for end users:
+                        uriHandler.openUri("https://ssd.jpl.nasa.gov/tools/sbdb_lookup.html#/?sstr=$id")
+                    }
                 )
+
+
+                MainTab.Pointing -> {
+                    val obs = st.observer
+                    PointingTab(
+                        obsLatDeg = obs?.latitudeDeg,
+                        obsLonDeg = obs?.longitudeDeg,
+                        obsHeightMeters = obs?.elevationMeters,
+                        targetAltAz = pointingTarget, // ✅ pass real target when available
+                        onJumpToResults = { tab = MainTab.Results }
+                    )
+                }
             }
         }
     }
 }
+
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 private fun SettingsTab(
@@ -129,7 +173,10 @@ private fun SettingsTab(
     onUpdateKey: (String) -> Unit
 ) {
     val scroll = rememberScrollState()
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
 
+    // NASA API signup page (NeoWs uses the same API key)
+    val apiKeyUrl = "https://api.nasa.gov/"
 
     Column(
         modifier = Modifier
@@ -150,7 +197,22 @@ private fun SettingsTab(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Link to get a key
+                TextButton(
+                    onClick = { uriHandler.openUri(apiKeyUrl) },
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    Text("Get a free NASA API key")
+                }
+
+                Text(
+                    "Tip: After you request a key, paste it here and tap Save.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
                     Button(onClick = onSaveKey, enabled = !st.isBusy) { Text("Save") }
                     if (st.apiKeySaved) Text("Saved ✓", color = MaterialTheme.colorScheme.primary)
                 }
@@ -161,30 +223,22 @@ private fun SettingsTab(
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Location / Permissions", style = MaterialTheme.typography.titleMedium)
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = if (st.hasLocationPermission)
-                                Icons.Default.CheckCircle
-                            else
-                                Icons.Default.Error,
-                            contentDescription = null,
-                            tint = if (st.hasLocationPermission)
-                                MaterialTheme.colorScheme.primary
-                            else
-                                MaterialTheme.colorScheme.error
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            text = if (st.hasLocationPermission) "Granted" else "Not granted",
-                            color = if (st.hasLocationPermission)
-                                MaterialTheme.colorScheme.primary
-                            else
-                                MaterialTheme.colorScheme.error
-                        )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = if (st.hasLocationPermission) Icons.Default.CheckCircle else Icons.Default.Error,
+                        contentDescription = null,
+                        tint = if (st.hasLocationPermission) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = if (st.hasLocationPermission) "Granted" else "Not granted",
+                        color = if (st.hasLocationPermission) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                    )
+
+                    Spacer(Modifier.width(12.dp))
+                    Button(onClick = onRequestPermission, enabled = !st.isBusy) {
+                        Text("Request Permission")
                     }
-
-
                 }
 
                 st.observer?.let { obs ->
@@ -208,6 +262,7 @@ private fun SettingsTab(
         }
     }
 }
+
 
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
@@ -310,15 +365,70 @@ private fun PlannerTab(
     }
 }
 
+private enum class ResultsSort { Default, DistanceAu, PeakTime }
+
 @RequiresApi(Build.VERSION_CODES.O)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ResultsTab(
     st: NeoPlannerUiState,
     timeFmt: DateTimeFormatter,
     mode: ResultsMode,
     onModeChange: (ResultsMode) -> Unit,
-    onSelectNeo: (String) -> Unit
+    onPointNeo: (String) -> Unit,
+    onOpenNeoDetails: (String) -> Unit
 ) {
+    var sheetNeoId by remember { mutableStateOf<String?>(null) }
+    var sheetNeoName by remember { mutableStateOf<String?>(null) }
+
+    // Bottom sheet (shows when sheetNeoId != null)
+    if (sheetNeoId != null) {
+        val id = sheetNeoId!!
+        val name = sheetNeoName ?: id
+
+        ModalBottomSheet(
+            onDismissRequest = {
+                sheetNeoId = null
+                sheetNeoName = null
+            }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(name, style = MaterialTheme.typography.titleLarge)
+                Text("Choose an action:", style = MaterialTheme.typography.bodyMedium)
+
+                Button(
+                    onClick = {
+                        sheetNeoId = null
+                        sheetNeoName = null
+                        onPointNeo(id)
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Point")
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        // Keep sheet open or close it — your preference. Closing feels nicer.
+                        sheetNeoId = null
+                        sheetNeoName = null
+                        onOpenNeoDetails(id)
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("View NASA/JPL Details")
+                }
+
+                Spacer(Modifier.height(6.dp))
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -365,9 +475,15 @@ private fun ResultsTab(
                             ElevatedCard(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable { onSelectNeo(item.neo.id) }
+                                    .clickable {
+                                        sheetNeoId = item.neo.id
+                                        sheetNeoName = item.neo.name
+                                    }
                             ) {
-                                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Column(
+                                    Modifier.padding(10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
                                     Text(item.neo.name, style = MaterialTheme.typography.titleSmall)
                                     Text("Hazardous: ${if (item.neo.isHazardous) "Yes" else "No"} | H: ${item.neo.hMagnitude ?: "—"}")
                                     Text("Closest: ${item.neo.closestApproachAu ?: "—"} AU @ ${item.neo.closestApproachLocal?.format(timeFmt) ?: "—"}")
@@ -392,8 +508,18 @@ private fun ResultsTab(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         items(st.results) { neo ->
-                            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-                                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            ElevatedCard(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        sheetNeoId = neo.id
+                                        sheetNeoName = neo.name
+                                    }
+                            ) {
+                                Column(
+                                    Modifier.padding(10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
                                     Text(neo.name, style = MaterialTheme.typography.titleSmall)
                                     Text("Hazardous: ${if (neo.isHazardous) "Yes" else "No"} | H: ${neo.hMagnitude ?: "—"}")
                                     Text("Closest: ${neo.closestApproachAu ?: "—"} AU @ ${neo.closestApproachLocal?.format(timeFmt) ?: "—"}")
