@@ -17,6 +17,7 @@ playServicesLocation = "21.3.0"
 # Compose
 compose-bom = "2025.01.00"
 activity-compose = "1.10.1"
+camerax = "1.5.2"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -44,6 +45,12 @@ androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = 
 # Activity / Compose integration (REQUIRED for setContent + rememberLauncherForActivityResult)
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity-compose" }
 androidx-activity-ktx = { module = "androidx.activity:activity-ktx", version.ref = "activity-compose" }
+# CameraX (Camera preview in-app)
+androidx-camera-core = { module = "androidx.camera:camera-core", version.ref = "camerax" }
+androidx-camera-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "camerax" }
+androidx-camera-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "camerax" }
+androidx-camera-view = { module = "androidx.camera:camera-view", version = "camerax" }
+androidx-camera-extensions = { module = "androidx.camera:camera-extensions", version = "camerax" }
 
 
 

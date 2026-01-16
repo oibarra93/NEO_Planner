@@ -23,12 +23,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -52,12 +54,15 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import com.oscaribarra.neoplanner.planner.PlanRequest
 import com.oscaribarra.neoplanner.planner.PlannedNeoResult
+import com.oscaribarra.neoplanner.ui.camera.CameraTab
 import com.oscaribarra.neoplanner.ui.pointing.PointingTab
 import com.oscaribarra.neoplanner.ui.pointing.TargetAltAz
+import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 
 private enum class ResultsMode { Planned, Raw }
-private enum class MainTab { Settings, Planner, Results, Pointing }
+private enum class MainTab { Planner, Results, Pointing, Camera }
+private enum class PlannedSort { BestPeakAlt, DistanceAu, PeakTime }
 
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalMaterial3Api::class)
@@ -67,27 +72,35 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
 
-
-    val permissionLauncher = rememberLauncherForActivityResult(
+    val permissionLauncherLocation = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
-    ) { granted -> vm.setHasLocationPermission(granted) }
+    ) { granted: Boolean -> vm.setHasLocationPermission(granted) }
+
+    // Kept for later use if you decide to request permission from UI.
+    // CameraTab can also just fail gracefully and show an error if permission is missing.
+    val permissionLauncherCamera = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { _: Boolean -> /* no-op */ }
 
     val timeFmt = remember { DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm z") }
 
     var tab by remember { mutableStateOf(MainTab.Planner) }
     var mode by remember { mutableStateOf(ResultsMode.Planned) }
+    var plannedSort by remember { mutableStateOf(PlannedSort.BestPeakAlt) }
+
+    // ✅ Settings sheet state
+    var showSettings by remember { mutableStateOf(false) }
 
     // Selected planned result (if any)
     val selectedPlanned = remember(st.planned, st.selectedNeoId) {
         st.planned.firstOrNull { it.neo.id == st.selectedNeoId }
     }
 
-    // Build target for PointingTab if we have peak Alt/Az
+    // Build target for Pointing/Camera tabs from selected planned peak Alt/Az
     val pointingTarget: TargetAltAz? = remember(selectedPlanned) {
         val p = selectedPlanned ?: return@remember null
         val alt = p.peakAltitudeDeg ?: return@remember null
         val az = p.peakAzimuthDeg ?: return@remember null
-
         val whenStr = p.peakTimeLocal?.format(timeFmt) ?: "peak time"
         TargetAltAz(
             label = "${p.neo.name} • $whenStr",
@@ -96,20 +109,43 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
         )
     }
 
+    // ✅ Settings as a modal bottom sheet
+    if (showSettings) {
+        ModalBottomSheet(
+            onDismissRequest = { showSettings = false }
+        ) {
+            SettingsTab(
+                st = st,
+                timeFmt = timeFmt,
+                onRequestPermission = { permissionLauncherLocation.launch(Manifest.permission.ACCESS_FINE_LOCATION) },
+                onSaveKey = vm::saveApiKey,
+                onUpdateKey = vm::updateApiKey
+            )
+            Spacer(Modifier.height(12.dp))
+        }
+    }
+
     Scaffold(
-        topBar = { TopAppBar(title = { Text("NEO Telescope Planner") }) }
+        topBar = {
+            TopAppBar(
+                title = { Text("NEO Telescope Planner") },
+                actions = {
+                    IconButton(onClick = { showSettings = true }) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Settings"
+                        )
+                    }
+                }
+            )
+        }
     ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            PrimaryTabRow(selectedTabIndex = tab.ordinal)   {
-                Tab(
-                    selected = tab == MainTab.Settings,
-                    onClick = { tab = MainTab.Settings },
-                    text = { Text("Settings") }
-                )
+            PrimaryTabRow(selectedTabIndex = tab.ordinal) {
                 Tab(
                     selected = tab == MainTab.Planner,
                     onClick = { tab = MainTab.Planner },
@@ -122,20 +158,17 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
                 )
                 Tab(
                     selected = tab == MainTab.Pointing,
-                    onClick = { tab = MainTab.Pointing }, // ✅ no item here
+                    onClick = { tab = MainTab.Pointing },
                     text = { Text("Pointing") }
+                )
+                Tab(
+                    selected = tab == MainTab.Camera,
+                    onClick = { tab = MainTab.Camera },
+                    text = { Text("Camera") }
                 )
             }
 
             when (tab) {
-                MainTab.Settings -> SettingsTab(
-                    st = st,
-                    timeFmt = timeFmt,
-                    onRequestPermission = { permissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION) },
-                    onSaveKey = vm::saveApiKey,
-                    onUpdateKey = vm::updateApiKey
-                )
-
                 MainTab.Planner -> PlannerTab(
                     st = st,
                     timeFmt = timeFmt,
@@ -166,16 +199,22 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
                     timeFmt = timeFmt,
                     mode = mode,
                     onModeChange = { mode = it },
-                    onPointNeo = { id ->
+                    plannedSort = plannedSort,
+                    onPlannedSortChange = { plannedSort = it },
+                    onOpenPointing = { id ->
                         vm.selectNeo(id)
                         tab = MainTab.Pointing
                     },
+                    onOpenCamera = { id ->
+                        vm.selectNeo(id)
+                        // Optional: request permission as you enter Camera tab
+                        permissionLauncherCamera.launch(Manifest.permission.CAMERA)
+                        tab = MainTab.Camera
+                    },
                     onOpenNeoDetails = { id ->
-                        // SBDB lookup works well for end users:
                         uriHandler.openUri("https://ssd.jpl.nasa.gov/tools/sbdb_lookup.html#/?sstr=$id")
                     }
                 )
-
 
                 MainTab.Pointing -> {
                     val obs = st.observer
@@ -183,14 +222,31 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
                         obsLatDeg = obs?.latitudeDeg,
                         obsLonDeg = obs?.longitudeDeg,
                         obsHeightMeters = obs?.elevationMeters,
-                        targetAltAz = pointingTarget, // ✅ pass real target when available
-                        onJumpToResults = { tab = MainTab.Results }
+                        targetAltAz = pointingTarget,
+                        onJumpToResults = { tab = MainTab.Results },
+                        onOpenCameraTab = {
+                            permissionLauncherCamera.launch(Manifest.permission.CAMERA)
+                            tab = MainTab.Camera
+                        }
+                    )
+                }
+
+                MainTab.Camera -> {
+                    val obs = st.observer
+                    CameraTab(
+                        obsLatDeg = obs?.latitudeDeg,
+                        obsLonDeg = obs?.longitudeDeg,
+                        obsHeightMeters = obs?.elevationMeters,
+                        targetAltAz = pointingTarget,
+                        onBackToResults = { tab = MainTab.Results }
                     )
                 }
             }
         }
     }
 }
+
+/* -------------------- Settings UI (unchanged) -------------------- */
 
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
@@ -204,7 +260,6 @@ private fun SettingsTab(
     val scroll = rememberScrollState()
     val uriHandler = LocalUriHandler.current
 
-    // NASA API signup page (NeoWs uses the same API key)
     val apiKeyUrl = "https://api.nasa.gov/"
 
     Column(
@@ -226,7 +281,6 @@ private fun SettingsTab(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // Link to get a key
                 TextButton(
                     onClick = { uriHandler.openUri(apiKeyUrl) },
                     contentPadding = PaddingValues(0.dp)
@@ -240,8 +294,10 @@ private fun SettingsTab(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Button(onClick = onSaveKey, enabled = !st.isBusy) { Text("Save") }
                     if (st.apiKeySaved) Text("Saved ✓", color = MaterialTheme.colorScheme.primary)
                 }
@@ -292,6 +348,7 @@ private fun SettingsTab(
     }
 }
 
+/* -------------------- Planner / Results (same as your current) -------------------- */
 
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
@@ -366,9 +423,7 @@ private fun PlannerTab(
                     Button(onClick = onFetch, enabled = !st.isBusy) {
                         Text(if (st.isBusy) "Working…" else "Fetch (debug)")
                     }
-                    Button(onClick = onPlan, enabled = !st.isBusy) {
-                        Text("Plan Visibility")
-                    }
+                    Button(onClick = onPlan, enabled = !st.isBusy) { Text("Plan Visibility") }
                 }
             }
         }
@@ -378,7 +433,7 @@ private fun PlannerTab(
                 Text("Pointing Info", style = MaterialTheme.typography.titleMedium)
 
                 if (selected == null) {
-                    Text("Go to Results tab and tap a planned result.")
+                    Text("Go to Results tab and choose a planned result.")
                 } else {
                     Text(selected.neo.name, style = MaterialTheme.typography.titleSmall)
                     Text("Peak time: ${selected.peakTimeLocal?.format(timeFmt) ?: "—"}")
@@ -402,84 +457,15 @@ private fun ResultsTab(
     timeFmt: DateTimeFormatter,
     mode: ResultsMode,
     onModeChange: (ResultsMode) -> Unit,
-    onPointNeo: (String) -> Unit,
+    plannedSort: PlannedSort,
+    onPlannedSortChange: (PlannedSort) -> Unit,
+    onOpenPointing: (String) -> Unit,
+    onOpenCamera: (String) -> Unit,
     onOpenNeoDetails: (String) -> Unit
 ) {
-    // --- Sort "enums" (cannot be enum inside a function) ---
-    val PLANNED_SORT_DISTANCE = "distance"
-    val PLANNED_SORT_PEAK_TIME = "peak_time"
-    val RAW_SORT_DISTANCE = "distance"
-    val RAW_SORT_CLOSEST_TIME = "closest_time"
-
-    var plannedSort by remember { mutableStateOf(PLANNED_SORT_DISTANCE) }
-    var rawSort by remember { mutableStateOf(RAW_SORT_DISTANCE) }
-
     var sheetNeoId by remember { mutableStateOf<String?>(null) }
     var sheetNeoName by remember { mutableStateOf<String?>(null) }
 
-    // --- Helpers ---
-    fun auAsDoubleOrInf(value: Any?): Double {
-        return when (value) {
-            null -> Double.POSITIVE_INFINITY
-            is Double -> if (value.isFinite()) value else Double.POSITIVE_INFINITY
-            is Float -> value.toDouble().let { if (it.isFinite()) it else Double.POSITIVE_INFINITY }
-            is Int -> value.toDouble()
-            is Long -> value.toDouble()
-            is String -> value.toDoubleOrNull() ?: Double.POSITIVE_INFINITY
-            else -> Double.POSITIVE_INFINITY
-        }
-    }
-
-    // --- Sorted views ---
-    val plannedSorted = remember(st.planned, plannedSort) {
-        val farFuture = java.time.ZonedDateTime.now().plusYears(100)
-
-        when (plannedSort) {
-            PLANNED_SORT_DISTANCE ->
-                st.planned.sortedWith(
-                    compareBy<PlannedNeoResult> { auAsDoubleOrInf(it.neo.closestApproachAu) }
-                        .thenBy { it.peakTimeLocal ?: farFuture }
-                        .thenBy { it.neo.name }
-                )
-
-            PLANNED_SORT_PEAK_TIME ->
-                st.planned.sortedWith(
-                    compareBy<PlannedNeoResult> { it.peakTimeLocal ?: farFuture }
-                        .thenBy { auAsDoubleOrInf(it.neo.closestApproachAu) }
-                        .thenBy { it.neo.name }
-                )
-
-            else -> st.planned
-        }
-    }
-
-    val rawSorted = remember(st.results, rawSort) {
-        val farFuture = java.time.ZonedDateTime.now().plusYears(100)
-
-        when (rawSort) {
-            RAW_SORT_DISTANCE ->
-                st.results.sortedWith(
-                    compareBy<com.oscaribarra.neoplanner.data.model.NeoWithOrbit> {
-                        auAsDoubleOrInf(it.closestApproachAu)
-                    }
-                        .thenBy { it.closestApproachLocal ?: farFuture }
-                        .thenBy { it.name }
-                )
-
-            RAW_SORT_CLOSEST_TIME ->
-                st.results.sortedWith(
-                    compareBy<com.oscaribarra.neoplanner.data.model.NeoWithOrbit> {
-                        it.closestApproachLocal ?: farFuture
-                    }
-                        .thenBy { auAsDoubleOrInf(it.closestApproachAu) }
-                        .thenBy { it.name }
-                )
-
-            else -> st.results
-        }
-    }
-
-    // --- Bottom sheet (shows when sheetNeoId != null) ---
     if (sheetNeoId != null) {
         val id = sheetNeoId!!
         val name = sheetNeoName ?: id
@@ -503,50 +489,60 @@ private fun ResultsTab(
                     onClick = {
                         sheetNeoId = null
                         sheetNeoName = null
-                        onPointNeo(id)
+                        onOpenPointing(id)
                     },
                     modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Point")
-                }
+                ) { Text("Point (Sensors)") }
 
                 OutlinedButton(
                     onClick = {
                         sheetNeoId = null
                         sheetNeoName = null
-                        onOpenNeoDetails(id)
+                        onOpenCamera(id)
                     },
                     modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("View NASA/JPL Details")
-                }
+                ) { Text("Open Camera View") }
 
-                TextButton(
-                    onClick = {
-                        sheetNeoId = null
-                        sheetNeoName = null
-                    },
+                OutlinedButton(
+                    onClick = { onOpenNeoDetails(id) },
                     modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Close")
-                }
+                ) { Text("View NASA/JPL Details") }
 
                 Spacer(Modifier.height(6.dp))
             }
         }
     }
 
-    // --- UI ---
+    val plannedSorted = remember(st.planned, plannedSort) {
+        when (plannedSort) {
+            PlannedSort.BestPeakAlt ->
+                st.planned.sortedWith(
+                    compareByDescending<PlannedNeoResult> { it.peakAltitudeDeg ?: Double.NEGATIVE_INFINITY }
+                        .thenBy { it.neo.name }
+                )
+
+            PlannedSort.DistanceAu ->
+                st.planned.sortedWith(
+                    compareBy<PlannedNeoResult> { it.neo.closestApproachAu ?: Double.POSITIVE_INFINITY }
+                        .thenBy { it.neo.name }
+                )
+
+            PlannedSort.PeakTime ->
+                st.planned.sortedWith(
+                    compareBy<PlannedNeoResult> { it.peakTimeLocal ?: ZonedDateTime.now().plusYears(100) }
+                        .thenBy { it.neo.name }
+                )
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(12.dp)
     ) {
-        // Title + mode chips
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
                 when (mode) {
@@ -572,48 +568,28 @@ private fun ResultsTab(
 
         Spacer(Modifier.height(8.dp))
 
-        // Sort row (depends on mode)
-        Card {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Sort:", style = MaterialTheme.typography.labelLarge)
-
-                when (mode) {
-                    ResultsMode.Planned -> {
-                        FilterChip(
-                            selected = plannedSort == PLANNED_SORT_DISTANCE,
-                            onClick = { plannedSort = PLANNED_SORT_DISTANCE },
-                            label = { Text("Distance (AU)") }
-                        )
-                        FilterChip(
-                            selected = plannedSort == PLANNED_SORT_PEAK_TIME,
-                            onClick = { plannedSort = PLANNED_SORT_PEAK_TIME },
-                            label = { Text("Peak time") }
-                        )
-                    }
-
-                    ResultsMode.Raw -> {
-                        FilterChip(
-                            selected = rawSort == RAW_SORT_DISTANCE,
-                            onClick = { rawSort = RAW_SORT_DISTANCE },
-                            label = { Text("Distance (AU)") }
-                        )
-                        FilterChip(
-                            selected = rawSort == RAW_SORT_CLOSEST_TIME,
-                            onClick = { rawSort = RAW_SORT_CLOSEST_TIME },
-                            label = { Text("Closest time") }
-                        )
-                    }
-                }
+        if (mode == ResultsMode.Planned && st.planned.isNotEmpty()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Sort:", style = MaterialTheme.typography.bodyMedium)
+                FilterChip(
+                    selected = plannedSort == PlannedSort.BestPeakAlt,
+                    onClick = { onPlannedSortChange(PlannedSort.BestPeakAlt) },
+                    label = { Text("Best") }
+                )
+                FilterChip(
+                    selected = plannedSort == PlannedSort.DistanceAu,
+                    onClick = { onPlannedSortChange(PlannedSort.DistanceAu) },
+                    label = { Text("Distance") }
+                )
+                FilterChip(
+                    selected = plannedSort == PlannedSort.PeakTime,
+                    onClick = { onPlannedSortChange(PlannedSort.PeakTime) },
+                    label = { Text("Peak time") }
+                )
             }
-        }
 
-        Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(8.dp))
+        }
 
         when (mode) {
             ResultsMode.Planned -> {
@@ -660,7 +636,7 @@ private fun ResultsTab(
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(rawSorted) { neo ->
+                        items(st.results) { neo ->
                             ElevatedCard(
                                 modifier = Modifier
                                     .fillMaxWidth()
