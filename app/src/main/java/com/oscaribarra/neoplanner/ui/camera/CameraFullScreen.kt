@@ -533,7 +533,7 @@ fun CameraFullScreen(
                             imageCapture = cap,
                             executor = ContextCompat.getMainExecutor(context)
                         )
-                        status.value = if (uri != null) "Saved ✅" else "Save failed ❌"
+                        status.value = if (uri != null) "Saved" else "Save failed"
                         if (uri == null) error.value = "Failed to save photo."
                         isCapturing.value = false
                     }

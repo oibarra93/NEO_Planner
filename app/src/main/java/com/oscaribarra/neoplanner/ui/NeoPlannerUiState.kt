@@ -2,6 +2,7 @@ package com.oscaribarra.neoplanner.ui
 
 import com.oscaribarra.neoplanner.data.model.NeoWithOrbit
 import com.oscaribarra.neoplanner.data.model.Observer
+import com.oscaribarra.neoplanner.ui.pointing.TargetAltAz
 import com.oscaribarra.neoplanner.planner.PlannedNeoResult
 import java.time.ZonedDateTime
 
@@ -25,11 +26,25 @@ data class NeoPlannerUiState(
     // Raw NeoWs (debug)
     val results: List<NeoWithOrbit> = emptyList(),
 
-    // Planned output (Module 9)
+    // Planned output
     val planned: List<PlannedNeoResult> = emptyList(),
 
-    // Selection
+    // Selection (NEO id, or special "MOON")
     val selectedNeoId: String? = null,
 
-    val error: String? = null
+    // 🌙 Moon (from Horizons)
+    val moonTarget: TargetAltAz? = null,
+    val moonUpdatedLocal: ZonedDateTime? = null,
+    val moonError: String? = null,
+
+    val error: String? = null,
+
+    val planetTargets: Map<Int, TargetAltAz> = emptyMap(), // commandId -> target
+    val planetUpdatedLocal: java.time.ZonedDateTime? = null,
+    val planetError: String? = null,
+
+    // Optional if you want selection in UI:
+    val selectedPlanetCommand: Int? = null
+
 )
+

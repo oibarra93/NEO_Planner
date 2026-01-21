@@ -75,6 +75,16 @@ import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import kotlin.math.abs
 import java.util.concurrent.Executor
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
+
 
 /**
  * Camera Tab:
@@ -87,6 +97,7 @@ import java.util.concurrent.Executor
  * Notes:
  * - We "rebind" the camera after closing fullscreen to avoid the preview not resuming on some devices.
  */
+
 @Composable
 fun CameraTab(
     obsLatDeg: Double?,
@@ -95,6 +106,7 @@ fun CameraTab(
     targetAltAz: TargetAltAz?,
     onBackToResults: () -> Unit
 ) {
+    val overlayMessage = remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
@@ -274,7 +286,31 @@ fun CameraTab(
                             }
                         }
                     )
-                }
+                    // ✅ Overlay message (on top of camera)
+                    val msg = overlayMessage.value
+                    if (msg != null) {
+                        // auto-hide
+                        LaunchedEffect(msg) {
+                            delay(1500)
+                            overlayMessage.value = null
+                        }
+
+                        Surface(
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(top = 12.dp),
+                            color = Color.Black.copy(alpha = 0.55f),
+                            shape = MaterialTheme.shapes.large,
+                            tonalElevation = 0.dp
+                        ) {
+                            Text(
+                                text = msg,
+                                color = Color.White,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+
+                        }}}
             }
 
             // Fullscreen icon (top-right) — floating over preview
@@ -317,7 +353,7 @@ fun CameraTab(
                             imageCapture = cap,
                             executor = ContextCompat.getMainExecutor(context)
                         )
-                        //statusState.value = if (uri != null) "Saved ✅" else "Failed to save photo."
+                        overlayMessage.value = if (uri != null) "Saved" else "Failed to save photo."
                     }
                 }
             )
