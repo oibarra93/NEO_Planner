@@ -80,20 +80,26 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
         st.planned.firstOrNull { it.neo.id == st.selectedNeoId }
     }
 
+    // Selected planet target (if any) from ViewModel state
+    val selectedPlanetTarget: TargetAltAz? = remember(st.selectedPlanetCommand, st.planetTargets) {
+        val cmd = st.selectedPlanetCommand ?: return@remember null
+        st.planetTargets[cmd]
+    }
+
     // Build target for Pointing/Camera tabs
-    val pointingTarget: TargetAltAz? = remember(st.selectedNeoId, selectedPlanned, st.moonTarget) {
-        when (st.selectedNeoId) {
-            "MOON" -> st.moonTarget
+    val pointingTarget: TargetAltAz? = remember(
+        st.selectedNeoId, selectedPlanned, st.moonTarget,
+        st.selectedPlanetCommand, selectedPlanetTarget
+    ) {
+        when {
+            st.selectedNeoId == "MOON" -> st.moonTarget
+            selectedPlanetTarget != null -> selectedPlanetTarget
             else -> {
                 val p = selectedPlanned ?: return@remember null
                 val alt = p.peakAltitudeDeg ?: return@remember null
                 val az = p.peakAzimuthDeg ?: return@remember null
                 val whenStr = p.peakTimeLocal?.format(timeFmt) ?: "peak time"
-                TargetAltAz(
-                    label = "${p.neo.name} • $whenStr",
-                    altitudeDeg = alt,
-                    azimuthDegTrue = az
-                )
+                TargetAltAz("${p.neo.name} • $whenStr", alt, az)
             }
         }
     }
@@ -197,7 +203,9 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
                     },
                     onOpenNeoDetails = { id ->
                         uriHandler.openUri("https://ssd.jpl.nasa.gov/tools/sbdb_lookup.html#/?sstr=$id")
-                    }
+                    },
+                    selectedPlanetCommand = st.selectedPlanetCommand,      // <-- pass ViewModel state down
+                    onSelectPlanet = { cmd -> vm.selectPlanet(cmd) }       // <-- update ViewModel when user picks a planet
                 )
 
                 MainTab.Pointing -> {

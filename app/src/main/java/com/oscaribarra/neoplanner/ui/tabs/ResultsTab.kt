@@ -2,7 +2,6 @@ package com.oscaribarra.neoplanner.ui.tabs
 
 import android.os.Build
 import androidx.annotation.RequiresApi
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,7 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -24,6 +22,9 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -38,10 +39,13 @@ import com.oscaribarra.neoplanner.ui.NeoPlannerUiState
 import com.oscaribarra.neoplanner.ui.pointing.TargetAltAz
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
+import androidx.compose.foundation.clickable // <-- add this
 
+// Enums for tab state and sort order
 enum class ResultsMode { Planned, Raw }
 enum class PlannedSort { BestPeakAlt, DistanceAu, PeakTime }
 
+// Map of planet command IDs to human‑friendly names
 private val PLANET_NAMES: Map<Int, String> = mapOf(
     199 to "Mercury",
     299 to "Venus",
@@ -65,19 +69,21 @@ fun ResultsTab(
     onPlannedSortChange: (PlannedSort) -> Unit,
     onOpenPointing: (String) -> Unit,
     onOpenCamera: (String) -> Unit,
-    onOpenNeoDetails: (String) -> Unit
+    onOpenNeoDetails: (String) -> Unit,
+    selectedPlanetCommand: Int?,        // <— NEW
+    onSelectPlanet: (Int?) -> Unit
 ) {
     // Bottom sheet selection (NEOs + Moon + Planets)
     var sheetNeoId by remember { mutableStateOf<String?>(null) }
     var sheetNeoName by remember { mutableStateOf<String?>(null) }
 
     // Local planet selection for the dropdown (keeps this file self-contained)
-    var selectedPlanetCommand by remember { mutableStateOf<Int?>(null) }
+    //var selectedPlanetCommand by remember { mutableStateOf<Int?>(null) }
 
+    // Show bottom sheet when a NEO/Moon/planet is selected
     if (sheetNeoId != null) {
         val id = sheetNeoId!!
         val name = sheetNeoName ?: id
-
         ModalBottomSheet(
             onDismissRequest = {
                 sheetNeoId = null
@@ -124,6 +130,7 @@ fun ResultsTab(
         }
     }
 
+    // Sort the planned results based on current sort selection
     val plannedSorted = remember(st.planned, plannedSort) {
         when (plannedSort) {
             PlannedSort.BestPeakAlt ->
@@ -146,7 +153,7 @@ fun ResultsTab(
         }
     }
 
-    // Planets "in view" (alt > 0)
+    // Build a list of planets above the horizon (altitudeDeg > 0)
     val planetsInView: List<Pair<Int, TargetAltAz>> = remember(st.planetTargets) {
         val out = ArrayList<Pair<Int, TargetAltAz>>()
         for ((cmd, altAz) in st.planetTargets) {
@@ -158,11 +165,12 @@ fun ResultsTab(
         out
     }
 
-    // If current selection drops out of view, clear it
+    // Reset selected planet if it drops below horizon or is missing
     LaunchedEffect(planetsInView, selectedPlanetCommand) {
         val sel = selectedPlanetCommand ?: return@LaunchedEffect
         val stillThere = planetsInView.any { it.first == sel }
-        if (!stillThere) selectedPlanetCommand = null
+        if (!stillThere) onSelectPlanet(null)
+
     }
 
     Column(
@@ -183,7 +191,6 @@ fun ResultsTab(
                 },
                 style = MaterialTheme.typography.titleMedium
             )
-
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
                     selected = mode == ResultsMode.Planned,
@@ -200,7 +207,7 @@ fun ResultsTab(
 
         Spacer(Modifier.height(8.dp))
 
-        // 🌙 Moon card
+        // Moon card
         ElevatedCard(
             modifier = Modifier
                 .fillMaxWidth()
@@ -214,7 +221,6 @@ fun ResultsTab(
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text("Moon", style = MaterialTheme.typography.titleSmall)
-
                 val mt = st.moonTarget
                 if (mt != null) {
                     Text(mt.label, style = MaterialTheme.typography.bodySmall)
@@ -236,26 +242,23 @@ fun ResultsTab(
 
         Spacer(Modifier.height(10.dp))
 
-        // 🪐 Planets dropdown (in view)
+        // Planets dropdown (only enabled if there are planets above the horizon)
         PlanetDropdown(
             planetsInView = planetsInView,
             selectedCommand = selectedPlanetCommand,
-            onSelect = { selectedPlanetCommand = it },
+            onSelect = { cmd -> onSelectPlanet(cmd) },
             modifier = Modifier.fillMaxWidth()
         )
 
-        // Selected planet card (optional)
+        // Selected planet card (shows details if a planet is chosen)
         val selectedPlanetAltAz: TargetAltAz? = remember(selectedPlanetCommand, st.planetTargets) {
             val cmd = selectedPlanetCommand ?: return@remember null
             st.planetTargets[cmd]
         }
-
         if (selectedPlanetCommand != null && selectedPlanetAltAz != null) {
             Spacer(Modifier.height(8.dp))
-
             val cmd = selectedPlanetCommand!!
             val name = PLANET_NAMES[cmd] ?: "Planet $cmd"
-
             ElevatedCard(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -280,7 +283,7 @@ fun ResultsTab(
 
         Spacer(Modifier.height(10.dp))
 
-        // Sort chips for Planned
+        // Sort chips for planned results
         if (mode == ResultsMode.Planned && st.planned.isNotEmpty()) {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -303,11 +306,10 @@ fun ResultsTab(
                     label = { Text("Peak time") }
                 )
             }
-
             Spacer(Modifier.height(8.dp))
         }
 
-        // Results lists
+        // Results list depending on mode
         when (mode) {
             ResultsMode.Planned -> {
                 if (st.planned.isEmpty()) {
@@ -334,7 +336,6 @@ fun ResultsTab(
                                     Text("Hazardous: ${if (item.neo.isHazardous) "Yes" else "No"} | H: ${item.neo.hMagnitude ?: "—"}")
                                     Text("Closest: ${item.neo.closestApproachAu ?: "—"} AU @ ${item.neo.closestApproachLocal?.format(timeFmt) ?: "—"}")
                                     Text("Best: ${item.bestStartLocal?.format(timeFmt) ?: "—"} → ${item.bestEndLocal?.format(timeFmt) ?: "—"}")
-
                                     val peakAlt = item.peakAltitudeDeg?.let { "%.2f°".format(it) } ?: "—"
                                     val peakAz = item.peakAzimuthDeg?.let { "%.2f°".format(it) } ?: "—"
                                     Text("Peak: $peakAlt @ ${item.peakTimeLocal?.format(timeFmt) ?: "—"}  |  Az: $peakAz ${item.peakCardinal ?: ""}")
@@ -344,7 +345,6 @@ fun ResultsTab(
                     }
                 }
             }
-
             ResultsMode.Raw -> {
                 if (st.results.isEmpty()) {
                     Text("No raw results yet. Go to Planner and tap “Fetch (debug)”.")
@@ -379,6 +379,14 @@ fun ResultsTab(
     }
 }
 
+/**
+ * A composable displaying a read‑only dropdown for selecting a planet in view.  Uses
+ * ExposedDropdownMenuBox/ExposedDropdownMenu from Material3 to properly anchor the
+ * menu to the text field.  The dropdown is disabled if there are no planets above
+ * the horizon.  Selecting an entry invokes [onSelect] with the planet’s command ID
+ * (or null for “None”).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PlanetDropdown(
     planetsInView: List<Pair<Int, TargetAltAz>>,
@@ -387,29 +395,34 @@ private fun PlanetDropdown(
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
-
+    // Determine the display label based on selection and visibility
     val label = when {
         planetsInView.isEmpty() -> "No planets in view"
         selectedCommand == null -> "Select planet (in view)"
         else -> PLANET_NAMES[selectedCommand] ?: "Planet $selectedCommand"
     }
-
-    Column(modifier = modifier) {
+    // Wrap field and menu in ExposedDropdownMenuBox for proper anchoring
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        modifier = modifier
+    ) {
         OutlinedTextField(
             value = label,
             onValueChange = {},
             readOnly = true,
             enabled = planetsInView.isNotEmpty(),
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            singleLine = true,
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(enabled = planetsInView.isNotEmpty()) { expanded = true },
-            singleLine = true
+                .menuAnchor()
         )
-
-        DropdownMenu(
+        ExposedDropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false }
         ) {
+            // Always provide a “None” option
             DropdownMenuItem(
                 text = { Text("None") },
                 onClick = {
@@ -417,13 +430,10 @@ private fun PlanetDropdown(
                     expanded = false
                 }
             )
-
-            for (pair in planetsInView) {
-                val cmd = pair.first
-                val altAz = pair.second
+            // List each planet above the horizon
+            for ((cmd, altAz) in planetsInView) {
                 val name = PLANET_NAMES[cmd] ?: "Planet $cmd"
                 val sub = "Az ${"%.1f".format(altAz.azimuthDegTrue)}° • Alt ${"%.1f".format(altAz.altitudeDeg)}°"
-
                 DropdownMenuItem(
                     text = {
                         Column {

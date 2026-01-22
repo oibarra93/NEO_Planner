@@ -20,12 +20,25 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
 
+/**
+ * ViewModel responsible for orchestrating NEO feed retrieval, planning visibility
+ * windows and computing alt/az for the Moon and planets via JPL Horizons.
+ *
+ * The Horizons integration here has been updated to use consistent quoting and
+ * locale‑safe formatting when building API requests.  All site coordinates and
+ * timestamps are quoted (single quotes) and formatted with {@link Locale#US}
+ * regardless of the device locale to ensure decimals use the dot separator.
+ * Times passed to Horizons are derived from {@code labelTimeLocal} and
+ * converted to UTC via {@link ZoneOffset#UTC} so that the request time
+ * matches the label displayed in the UI.
+ */
 class NeoPlannerViewModel(
     private val settings: SettingsDataStore,
     private val observerProvider: ObserverProvider,
@@ -104,7 +117,7 @@ class NeoPlannerViewModel(
 
     fun updateTwilightLimitDeg(v: String) {
         val parsed = v.toDoubleOrNull()
-        if (parsed !=null) _state.value = _state.value.copy(twilightLimitDeg = parsed.coerceIn(-30.0, 5.0))
+        if (parsed != null) _state.value = _state.value.copy(twilightLimitDeg = parsed.coerceIn(-30.0, 5.0))
     }
 
     fun selectNeo(id: String) {
@@ -124,10 +137,10 @@ class NeoPlannerViewModel(
         val obs = _state.value.observer ?: return@launch
         refreshMoonInternal(obs)
     }
+
     fun selectPlanet(commandId: Int?) {
         _state.value = _state.value.copy(selectedPlanetCommand = commandId)
     }
-
 
     @RequiresApi(Build.VERSION_CODES.O)
     private suspend fun refreshMoonInternal(obs: com.oscaribarra.neoplanner.data.model.Observer) {
@@ -139,7 +152,6 @@ class NeoPlannerViewModel(
                 obsHeightMeters = obs.elevationMeters,
                 labelTimeLocal = nowLocal
             )
-
 
             _state.value = _state.value.copy(
                 moonTarget = target,
@@ -154,22 +166,30 @@ class NeoPlannerViewModel(
             )
         }
     }
+
+    /**
+     * Query Horizons for the apparent altitude/azimuth of a solar‑system body at the
+     * specified time and observer location.  Uses single‑quoted values for
+     * {@code SITE_COORD} and {@code TLIST}, and formats numeric values with
+     * {@link Locale#US} to avoid locale‑dependent decimal separators.
+     */
     @RequiresApi(Build.VERSION_CODES.O)
     private suspend fun fetchBodyAltAzFromHorizons(
-        commandId: Int,                  // 301 Moon, 499 Mars, etc.
-        bodyLabel: String,               // "Moon", "Mars", etc.
+        commandId: Int,                  // 499 Mars, 299 Venus, etc.
+        bodyLabel: String,               // "Mars", "Venus", etc.
         obsLatDeg: Double,
         obsLonDeg: Double,
         obsHeightMeters: Double,
         labelTimeLocal: ZonedDateTime
     ): TargetAltAz = withContext(Dispatchers.IO) {
-
+        // Convert elevation to kilometres
         val elevKm = obsHeightMeters / 1000.0
-
-        // Use UTC timestamp for Horizons TLIST (it accepts many formats).
-        val utc = ZonedDateTime.now(ZoneId.of("UTC"))
-        val tlist = utc.format(DateTimeFormatter.ofPattern("yyyy-MMM-dd HH:mm")) // e.g. 2026-Jan-20 20:57
-
+        // Derive the request timestamp from the caller's label time and convert to UTC
+        val utc = labelTimeLocal.withZoneSameInstant(ZoneOffset.UTC)
+        val tlist = utc.format(DateTimeFormatter.ofPattern("yyyy-MMM-dd HH:mm", Locale.US))
+        // Format lon,lat,elev(km) with US locale for consistent decimal separators
+        val siteCoord = String.format(Locale.US, "%.8f,%.8f,%.4f", obsLonDeg, obsLatDeg, elevKm)
+        // Build the Horizons request; quote SITE_COORD and TLIST
         val url = Uri.parse("https://ssd.jpl.nasa.gov/api/horizons.api").buildUpon()
             .appendQueryParameter("format", "json")
             .appendQueryParameter("MAKE_EPHEM", "YES")
@@ -177,53 +197,46 @@ class NeoPlannerViewModel(
             .appendQueryParameter("COMMAND", commandId.toString())
             .appendQueryParameter("CENTER", "coord@399")
             .appendQueryParameter("COORD_TYPE", "GEODETIC")
-
-            // IMPORTANT: no quotes around SITE_COORD in the API call
-            // and lon can be negative (Horizons will convert to E-lon internally)
-            .appendQueryParameter("SITE_COORD", "${obsLonDeg},${obsLatDeg},${"%.4f".format(elevKm)}")
-
-            .appendQueryParameter("TLIST", tlist)
+            .appendQueryParameter("SITE_COORD", "'${siteCoord}'")
+            .appendQueryParameter("TLIST", "'${tlist}'")
             .appendQueryParameter("QUANTITIES", "4") // Apparent AZ/EL
             .appendQueryParameter("CSV_FORMAT", "YES")
             .appendQueryParameter("ANG_FORMAT", "DEG")
             .appendQueryParameter("OBJ_DATA", "NO")
             .build()
             .toString()
-
+        // Execute the HTTP request
         val jsonText = SimpleHttp.get(url)
         val obj = JSONObject(jsonText)
         val resultText = obj.optString("result")
-        if (resultText.isBlank()) error("Horizons response missing result text.")
-
-        val soe = resultText.indexOf("\$\$SOE")
-        val eoe = resultText.indexOf("\$\$EOE")
-        if (soe < 0 || eoe < 0 || eoe <= soe) error("Horizons response missing SOE/EOE block.")
-
-        val block = resultText.substring(soe, eoe)
+        if (resultText.isBlank()) {
+            val msg = obj.optString("message")
+            error(if (msg.isNotBlank()) msg else "Horizons response missing result text.")
+        }
+        // Extract the $$SOE..$$EOE block
+        val soeIdx = resultText.indexOf(SOE_MARK)
+        val eoeIdx = resultText.indexOf(EOE_MARK)
+        if (soeIdx < 0 || eoeIdx < 0 || eoeIdx <= soeIdx) {
+            val preview = resultText.take(700)
+            error("Horizons response missing SOE/EOE block. Preview:\n$preview")
+        }
+        val block = resultText.substring(soeIdx + SOE_MARK.length, eoeIdx)
+        // Find the first non‑empty line containing commas and extract numeric values
         val dataLine = block.lines()
             .map { it.trim() }
-            .firstOrNull { it.isNotBlank() && !it.startsWith("$$") && it.contains(",") }
-            ?: error("No Horizons CSV data line found.")
-
-        // Example line:
-        // 2026-Jan-20 20:57:00.000,*,m, 169.824884,    38.068210,
-        val parts = dataLine.split(",").map { it.trim() }
-
-        // Robust: collect numeric tokens from the end, ignoring blanks and markers
-        val nums = mutableListOf<Double>()
-        for (i in parts.indices.reversed()) {
-            val v = parts[i].toDoubleOrNull()
-            if (v != null) {
-                nums.add(v)
-                if (nums.size == 2) break
-            }
+            .firstOrNull { it.isNotBlank() && it.contains(",") }
+            ?: error("No Horizons CSV data line found between SOE/EOE.")
+        val tokens = dataLine.split(",")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        val nums = tokens.mapNotNull { it.toDoubleOrNull() }
+        if (nums.size < 2) {
+            error("Could not find numeric AZ/EL in Horizons CSV line:\n$dataLine")
         }
-        if (nums.size < 2) error("Could not parse AZ/EL from Horizons CSV line:\n$dataLine")
-
-        val el = nums[0]       // last numeric token
-        val az = nums[1]       // second-to-last numeric token
-
-        val label = "$bodyLabel • ${labelTimeLocal.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm z"))}"
+        val az = nums[nums.size - 2]
+        val el = nums[nums.size - 1]
+        val labelFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm z", Locale.US)
+        val label = "$bodyLabel • ${labelTimeLocal.format(labelFmt)}"
         TargetAltAz(
             label = label,
             altitudeDeg = el,
@@ -231,6 +244,7 @@ class NeoPlannerViewModel(
         )
     }
 
+    // List of planet command IDs (Mercury through Neptune) and labels
     private val PLANETS: List<Pair<Int, String>> = listOf(
         199 to "Mercury",
         299 to "Venus",
@@ -251,7 +265,6 @@ class NeoPlannerViewModel(
     private suspend fun refreshPlanetsInternal(obs: com.oscaribarra.neoplanner.data.model.Observer) {
         try {
             val nowLocal = _state.value.nowLocal ?: ZonedDateTime.now(ZoneId.of(obs.timeZoneId))
-
             val targets = mutableMapOf<Int, TargetAltAz>()
             for ((cmd, name) in PLANETS) {
                 val t = fetchBodyAltAzFromHorizons(
@@ -264,7 +277,6 @@ class NeoPlannerViewModel(
                 )
                 targets[cmd] = t
             }
-
             _state.value = _state.value.copy(
                 planetTargets = targets,
                 planetUpdatedLocal = nowLocal,
@@ -279,18 +291,9 @@ class NeoPlannerViewModel(
         }
     }
 
-
     /**
-     * JPL Horizons API (GET):
-     * - COMMAND='301' (Moon)
-     * - EPHEM_TYPE='OBSERVER'
-     * - CENTER='coord@399' + COORD_TYPE='GEODETIC'
-     * - SITE_COORD='lon,lat,elev_km'  <-- IMPORTANT: QUOTED (single quotes)
-     * - TLIST='YYYY-MMM-DD HH:MM'     <-- IMPORTANT: QUOTED
-     * - QUANTITIES='4' (AZ/EL)
-     * - CSV_FORMAT='YES'
-     *
-     * Parses "result" between $$SOE and $$EOE.
+     * Fetch the Moon's altitude/azimuth via Horizons.  Quoting and locale‑safe
+     * formatting are applied consistently with {@link #fetchBodyAltAzFromHorizons}.
      */
     @RequiresApi(Build.VERSION_CODES.O)
     private suspend fun fetchMoonAltAzFromHorizons(
@@ -300,22 +303,18 @@ class NeoPlannerViewModel(
         labelTimeLocal: ZonedDateTime
     ): TargetAltAz = withContext(Dispatchers.IO) {
         val elevKm = obsHeightMeters / 1000.0
-
-        val utcNow = ZonedDateTime.now(ZoneId.of("UTC"))
+        val utcNow = labelTimeLocal.withZoneSameInstant(ZoneOffset.UTC)
         val tlistFmt = DateTimeFormatter.ofPattern("yyyy-MMM-dd HH:mm", Locale.US)
         val tlist = utcNow.format(tlistFmt)
-
-        // Horizons wants lon,lat,elev(km)
         val siteCoord = String.format(Locale.US, "%.8f,%.8f,%.4f", obsLonDeg, obsLatDeg, elevKm)
-
         val url = Uri.parse("https://ssd.jpl.nasa.gov/api/horizons.api").buildUpon()
             .appendQueryParameter("format", "json")
             .appendQueryParameter("EPHEM_TYPE", "OBSERVER")
             .appendQueryParameter("COMMAND", "301")
             .appendQueryParameter("CENTER", "coord@399")
             .appendQueryParameter("COORD_TYPE", "GEODETIC")
-            .appendQueryParameter("SITE_COORD", "'$siteCoord'") // IMPORTANT: quoted
-            .appendQueryParameter("TLIST", "'$tlist'")           // IMPORTANT: quoted
+            .appendQueryParameter("SITE_COORD", "'${siteCoord}'")
+            .appendQueryParameter("TLIST", "'${tlist}'")
             .appendQueryParameter("QUANTITIES", "4")
             .appendQueryParameter("CSV_FORMAT", "YES")
             .appendQueryParameter("ANG_FORMAT", "DEG")
@@ -323,46 +322,35 @@ class NeoPlannerViewModel(
             .appendQueryParameter("MAKE_EPHEM", "YES")
             .build()
             .toString()
-
         val jsonText = SimpleHttp.get(url)
         val obj = JSONObject(jsonText)
-
         val resultText = obj.optString("result")
         if (resultText.isBlank()) {
             val msg = obj.optString("message")
             error(if (msg.isNotBlank()) msg else "Horizons response missing result text.")
         }
-
         val soeIdx = resultText.indexOf(SOE_MARK)
         val eoeIdx = resultText.indexOf(EOE_MARK)
         if (soeIdx < 0 || eoeIdx < 0 || eoeIdx <= soeIdx) {
             val preview = resultText.take(700)
             error("Horizons response missing SOE/EOE block. Preview:\n$preview")
         }
-
         val block = resultText.substring(soeIdx + SOE_MARK.length, eoeIdx)
         val dataLine = block.lines()
             .map { it.trim() }
             .firstOrNull { it.isNotBlank() && it.contains(",") }
             ?: error("No Horizons CSV data line found between SOE/EOE.")
-
-        // Split CSV, remove empties (handles trailing comma), keep tokens
         val tokens = dataLine.split(",")
             .map { it.trim() }
             .filter { it.isNotEmpty() }
-
-        // Find the last two numeric values in the line (AZ then EL for this output)
         val nums = tokens.mapNotNull { it.toDoubleOrNull() }
         if (nums.size < 2) {
             error("Could not find numeric AZ/EL in Horizons CSV line:\n$dataLine")
         }
-
         val az = nums[nums.size - 2]
         val el = nums[nums.size - 1]
-
         val labelFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm z", Locale.US)
         val label = "Moon • ${labelTimeLocal.format(labelFmt)}"
-
         TargetAltAz(
             label = label,
             altitudeDeg = el,
@@ -370,33 +358,27 @@ class NeoPlannerViewModel(
         )
     }
 
-
     // -------------------------
     // Planner
     // -------------------------
     @RequiresApi(Build.VERSION_CODES.O)
     fun planVisibility(appContext: Context, req: PlanRequest) = viewModelScope.launch {
         _state.value = _state.value.copy(isBusy = true, error = null)
-
         try {
             if (_state.value.observer == null || _state.value.results.isEmpty()) {
                 fetchNeosNowInternal()
             }
-
             val obs = _state.value.observer ?: error("Observer not available.")
             val neos = _state.value.results
             val nowLocal = _state.value.nowLocal ?: ZonedDateTime.now(ZoneId.of(obs.timeZoneId))
-
             val planned = VisibilityPlanner(appContext).plan(
                 observer = obs,
                 neos = neos,
                 request = req,
                 nowLocal = nowLocal
             )
-
             // 🌙 refresh Moon whenever we have observer/time
             refreshMoonInternal(obs)
-
             _state.value = _state.value.copy(
                 isBusy = false,
                 planned = planned,
@@ -419,7 +401,6 @@ class NeoPlannerViewModel(
     fun debugFirstNeoAltAz(appContext: Context) {
         val obs = state.value.observer ?: return
         val first = state.value.results.firstOrNull() ?: return
-
         debugNeoAltAz(
             appContext = appContext,
             orbit = first.orbit,
@@ -440,15 +421,12 @@ class NeoPlannerViewModel(
         try {
             val file = com.oscaribarra.neoplanner.astro.spk.De442sManager(appContext).ensureKernel()
             val eph = com.oscaribarra.neoplanner.astro.spk.De442sEphemeris(file)
-
             try {
                 val el = NeoWsOrbitMapper.fromNeoWsOrbit(orbit)
                 val now = java.time.Instant.now()
-
                 val geo = com.oscaribarra.neoplanner.astro.orbit.GeoVector
                     .neoGeocentricEciKm(eph, el, now)
                     ?: error("NEO propagation returned null (e >= 1 or invalid elements)")
-
                 val topo = com.oscaribarra.neoplanner.astro.coords.Topocentric.solve(
                     geocentricEciKm = geo,
                     instantUtc = now,
@@ -456,17 +434,122 @@ class NeoPlannerViewModel(
                     obsLonDeg = obsLon,
                     obsHeightMeters = obsH
                 )
-
                 val msg =
                     "NEO OK @ $now\nAlt=${"%.2f".format(topo.altAz.altitudeDeg)}° " +
                             "Az=${"%.2f".format(topo.altAz.azimuthDeg)}° (${topo.cardinal})\n${topo.hint}"
                 android.util.Log.i("NEO-ALT", msg)
-
             } finally {
                 eph.close()
             }
         } catch (e: Exception) {
             android.util.Log.e("NEO-ALT", "NEO ERROR: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Debug helper to evaluate each planet’s altitude and azimuth using the Horizons API
+     * and log the intermediate steps.  This method iterates over all planet IDs in
+     * {@link #PLANETS}, constructs the same Horizons request used for normal
+     * processing, and writes detailed diagnostics (URL, tokens, altitude, azimuth)
+     * to Logcat.  It is intended for developer troubleshooting when the UI
+     * displays no planets in view but astronomical sources indicate planets should
+     * be visible.  Requires API 26+.
+     */
+    @RequiresApi(Build.VERSION_CODES.O)
+    fun debugPlanets() = viewModelScope.launch {
+        val obs = state.value.observer ?: run {
+            android.util.Log.e("DEBUG-PLANETS", "Observer not available for debugPlanets()")
+            return@launch
+        }
+        val nowLocal = state.value.nowLocal ?: ZonedDateTime.now(ZoneId.of(obs.timeZoneId))
+        for ((cmd, name) in PLANETS) {
+            debugFetchBodyAltAz(
+                commandId = cmd,
+                bodyLabel = name,
+                obsLatDeg = obs.latitudeDeg,
+                obsLonDeg = obs.longitudeDeg,
+                obsHeightMeters = obs.elevationMeters,
+                labelTimeLocal = nowLocal
+            )
+        }
+    }
+
+    /**
+     * Low-level diagnostic: issues the Horizons request for a single body and
+     * logs the URL, parsed CSV tokens and the extracted altitude/azimuth.  This
+     * duplicates much of the logic in {@link #fetchBodyAltAzFromHorizons} but
+     * avoids updating view state.  Use only for debugging.
+     */
+    @RequiresApi(Build.VERSION_CODES.O)
+    private suspend fun debugFetchBodyAltAz(
+        commandId: Int,
+        bodyLabel: String,
+        obsLatDeg: Double,
+        obsLonDeg: Double,
+        obsHeightMeters: Double,
+        labelTimeLocal: ZonedDateTime
+    ) {
+        withContext(Dispatchers.IO) {
+            val elevKm = obsHeightMeters / 1000.0
+            val utc = labelTimeLocal.withZoneSameInstant(ZoneOffset.UTC)
+            val tlist = utc.format(DateTimeFormatter.ofPattern("yyyy-MMM-dd HH:mm", Locale.US))
+            val siteCoord = String.format(Locale.US, "%.8f,%.8f,%.4f", obsLonDeg, obsLatDeg, elevKm)
+            val url = Uri.parse("https://ssd.jpl.nasa.gov/api/horizons.api").buildUpon()
+                .appendQueryParameter("format", "json")
+                .appendQueryParameter("MAKE_EPHEM", "YES")
+                .appendQueryParameter("EPHEM_TYPE", "OBSERVER")
+                .appendQueryParameter("COMMAND", commandId.toString())
+                .appendQueryParameter("CENTER", "coord@399")
+                .appendQueryParameter("COORD_TYPE", "GEODETIC")
+                .appendQueryParameter("SITE_COORD", "'${siteCoord}'")
+                .appendQueryParameter("TLIST", "'${tlist}'")
+                .appendQueryParameter("QUANTITIES", "4")
+                .appendQueryParameter("CSV_FORMAT", "YES")
+                .appendQueryParameter("ANG_FORMAT", "DEG")
+                .appendQueryParameter("OBJ_DATA", "NO")
+                .build()
+                .toString()
+            android.util.Log.i("DEBUG-PLANETS", "Requesting $bodyLabel: $url")
+            try {
+                val jsonText = SimpleHttp.get(url)
+                val obj = JSONObject(jsonText)
+                val resultText = obj.optString("result")
+                if (resultText.isBlank()) {
+                    val msg = obj.optString("message")
+                    android.util.Log.e("DEBUG-PLANETS", "${bodyLabel}: no result – ${msg}")
+                    return@withContext
+                }
+                val soeIdx = resultText.indexOf(SOE_MARK)
+                val eoeIdx = resultText.indexOf(EOE_MARK)
+                if (soeIdx < 0 || eoeIdx < 0 || eoeIdx <= soeIdx) {
+                    android.util.Log.e("DEBUG-PLANETS", "$bodyLabel: missing SOE/EOE markers")
+                    return@withContext
+                }
+                val block = resultText.substring(soeIdx + SOE_MARK.length, eoeIdx)
+                val dataLine = block.lines()
+                    .map { it.trim() }
+                    .firstOrNull { it.isNotBlank() && it.contains(",") }
+                if (dataLine == null) {
+                    android.util.Log.e("DEBUG-PLANETS", "$bodyLabel: no CSV line found")
+                    return@withContext
+                }
+                val tokens = dataLine.split(",")
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                val nums = tokens.mapNotNull { it.toDoubleOrNull() }
+                if (nums.size < 2) {
+                    android.util.Log.e("DEBUG-PLANETS", "$bodyLabel: insufficient numeric tokens: $tokens")
+                    return@withContext
+                }
+                val az = nums[nums.size - 2]
+                val el = nums[nums.size - 1]
+                android.util.Log.i(
+                    "DEBUG-PLANETS",
+                    "$bodyLabel – tokens=$tokens, nums=$nums, az=$az, el=$el"
+                )
+            } catch (e: Exception) {
+                android.util.Log.e("DEBUG-PLANETS", "$bodyLabel: exception ${e.message}", e)
+            }
         }
     }
 
@@ -477,7 +560,18 @@ class NeoPlannerViewModel(
     fun fetchNeosNow() = viewModelScope.launch {
         _state.value = _state.value.copy(isBusy = true, error = null, results = emptyList())
         try {
+            // Pull the latest NEO feed and details.  This will update _state.nowLocal and
+            // _state.observer, which are prerequisites for computing planet positions.
             fetchNeosNowInternal()
+            // Immediately after fetching NEOs, trigger a verbose Horizons query for each
+            // planet.  This invokes debugPlanets(), which iterates through the planet list
+            // and logs altitude/azimuth diagnostics.  We wrap the call in an SDK version
+            // check because debugPlanets() is annotated with @RequiresApi(O).  Doing this
+            // here ensures the debug helper runs automatically whenever the app starts or
+            // when the user presses the Fetch button.
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                debugPlanets()
+            }
         } catch (e: Exception) {
             _state.value = _state.value.copy(isBusy = false, error = e.message ?: "Unknown error")
         }
@@ -489,7 +583,6 @@ class NeoPlannerViewModel(
             "NEO-KEY",
             "Saved key len=${settings.getNeoWsApiKey().length}, typed len=${_state.value.apiKey.length}"
         )
-
         val savedKey = settings.getNeoWsApiKey()
         if (savedKey.isBlank()) {
             val typed = _state.value.apiKey.trim()
@@ -497,16 +590,12 @@ class NeoPlannerViewModel(
             settings.setNeoWsApiKey(typed)
             _state.value = _state.value.copy(apiKeySaved = true)
         }
-
         val now = ZonedDateTime.now()
         val zone = ZoneId.systemDefault()
-
         val observer = observerProvider.getObserver()
         val (startDate, endDate) = computeFeedDates(now, _state.value.hoursAhead)
-
         val candidates = repo.fetchCandidates(startDate, endDate)
         val details = repo.fetchDetails(candidates, _state.value.maxNeos, zone)
-
         _state.value = _state.value.copy(
             isBusy = false,
             nowLocal = now,
@@ -514,9 +603,16 @@ class NeoPlannerViewModel(
             results = details,
             error = null
         )
-
         // 🌙 refresh Moon too
         refreshMoonInternal(observer)
+        // 🪐 refresh planets and update planetTargets after fetching NEOs.  This call
+        // computes the apparent altitude/azimuth for each planet via Horizons and
+        // stores the results in _state.planetTargets, enabling the Results tab to
+        // show planets in view.  It is guarded by an API level check because
+        // refreshPlanetsInternal() is annotated with @RequiresApi(O).
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            refreshPlanetsInternal(observer)
+        }
     }
 
     // -------------------------
@@ -526,7 +622,6 @@ class NeoPlannerViewModel(
     private fun computeFeedDates(now: ZonedDateTime, hoursAhead: Int): Pair<String, String> {
         val start = now.toLocalDate()
         val end = now.plusHours(hoursAhead.toLong()).toLocalDate()
-
         val clampedEnd = if (end.isAfter(start.plusDays(7))) start.plusDays(7) else end
         return start.format(dateFmt) to clampedEnd.format(dateFmt)
     }
