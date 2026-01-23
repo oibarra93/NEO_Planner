@@ -55,6 +55,7 @@ object SunAltitude {
     /**
      * Convenience: Sun altitude only (degrees).
      */
+    @RequiresApi(Build.VERSION_CODES.O)
     fun sunAltitudeDeg(
         eph: De442sEphemeris,
         instantUtc: Instant,

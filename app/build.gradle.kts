@@ -68,7 +68,8 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation("androidx.compose.material3:material3")
     debugImplementation(libs.androidx.ui.tooling)
-
+    // build.gradle.kts: preview dependencies
+    implementation(libs.androidx.ui.tooling.preview) // ui-tooling-preview
     implementation(libs.ui.tooling.preview)
     debugImplementation(libs.ui.tooling)
     implementation(libs.androidx.material.icons.extended)

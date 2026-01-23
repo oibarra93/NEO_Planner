@@ -1,6 +1,7 @@
 package com.oscaribarra.neoplanner.ui.camera
 
 import android.content.ContentValues
+import androidx.compose.ui.tooling.preview.Preview
 import android.content.Context
 import android.hardware.camera2.CaptureRequest
 import android.net.Uri
@@ -10,14 +11,16 @@ import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
 import android.view.MotionEvent
+import androidx.annotation.OptIn
 import androidx.camera.camera2.interop.Camera2CameraControl
 import androidx.camera.camera2.interop.CaptureRequestOptions
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.Camera
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.MeteringPointFactory
-import androidx.camera.core.Preview
+import androidx.camera.core.Preview as CameraPreview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.animateContentSize
@@ -71,6 +74,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.tooling.preview.PreviewParameter
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -97,6 +101,9 @@ private enum class SidePanel { None, Align, Controls }
  * - Each panel is scrollable to prevent overlapping text
  * - Each panel has "<" button to collapse ALL panels
  */
+
+
+
 @Composable
 fun CameraFullScreen(
     targetAltAz: TargetAltAz?,
@@ -120,7 +127,7 @@ fun CameraFullScreen(
     val controlsTab = remember { mutableStateOf(ControlsTab.Zoom) }
 
     // Auto-collapse after inactivity (collapses into icons: None)
-    val lastInteractionMs = remember { mutableStateOf(System.currentTimeMillis()) }
+    val lastInteractionMs = remember { androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis()) }
     fun pingInteraction() { lastInteractionMs.value = System.currentTimeMillis() }
 
     LaunchedEffect(Unit) {
@@ -152,7 +159,7 @@ fun CameraFullScreen(
             try {
                 provider = providerFuture.get()
 
-                val preview = Preview.Builder().build().also { p ->
+                val preview = CameraPreview.Builder().build().also { p ->
                     p.setSurfaceProvider(pv.surfaceProvider)
                 }
 
@@ -544,7 +551,7 @@ fun CameraFullScreen(
 }
 
 /* ---------------- UI building blocks ---------------- */
-
+@Preview
 @Composable
 private fun SidePanelCard(
     modifier: Modifier,
@@ -579,6 +586,7 @@ private fun SidePanelCard(
     }
 }
 
+@Preview
 @Composable
 private fun FloatingSideIcon(
     modifier: Modifier,
@@ -598,6 +606,7 @@ private fun FloatingSideIcon(
     }
 }
 
+@Preview
 @Composable
 private fun ShutterFab(
     modifier: Modifier,
@@ -622,6 +631,8 @@ private fun ShutterFab(
 
 /* ---------------- Camera2 interop helpers (device-dependent) ---------------- */
 
+
+@OptIn(ExperimentalCamera2Interop::class)
 private fun applyAutoFocusMode(camera: Camera?, enabled: Boolean) {
     if (camera == null) return
     try {
@@ -644,6 +655,8 @@ private fun applyAutoFocusMode(camera: Camera?, enabled: Boolean) {
     }
 }
 
+@androidx.annotation.OptIn(androidx.camera.camera2.interop.ExperimentalCamera2Interop::class)
+
 private fun applyManualFocusBestEffort(camera: Camera?, focusDistance: Float) {
     if (camera == null) return
     try {
@@ -657,6 +670,8 @@ private fun applyManualFocusBestEffort(camera: Camera?, focusDistance: Float) {
         Log.w("CameraFullScreen", "Manual focus not supported: ${t.message}")
     }
 }
+
+@androidx.annotation.OptIn(androidx.camera.camera2.interop.ExperimentalCamera2Interop::class)
 
 private fun applyIsoExposureBestEffort(camera: Camera?, iso: Int, exposureTimeUs: Long) {
     if (camera == null) return

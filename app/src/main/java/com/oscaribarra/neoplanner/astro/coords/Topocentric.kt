@@ -1,5 +1,7 @@
 package com.oscaribarra.neoplanner.astro.coords
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import com.oscaribarra.neoplanner.astro.spk.Vec3Km
 import java.time.Instant
 
@@ -8,6 +10,7 @@ object Topocentric {
     /**
      * Compute Alt/Az + RA/Dec + cardinal + hint from a geocentric ECI vector (km).
      */
+    @RequiresApi(Build.VERSION_CODES.O)
     fun solve(
         geocentricEciKm: Vec3Km,
         instantUtc: Instant,

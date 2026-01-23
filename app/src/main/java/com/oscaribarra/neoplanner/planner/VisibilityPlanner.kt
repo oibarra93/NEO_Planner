@@ -173,6 +173,7 @@ class VisibilityPlanner(private val appContext: Context) {
 
         private val windows = ArrayList<WindowSummary>()
 
+        @RequiresApi(Build.VERSION_CODES.O)
         fun propagateHeliocentricKm(tUtc: Instant): Vec3Km? {
             // Use Module 8 propagator directly (already used inside GeoVector in your debug),
             // but here we avoid recomputing EarthSun each time.

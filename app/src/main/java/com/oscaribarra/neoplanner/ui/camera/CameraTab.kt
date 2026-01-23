@@ -128,7 +128,7 @@ fun CameraTab(
 
     // Small bottom popup controls
     val showQuickControls = remember { mutableStateOf(false) }
-    val quickControlsLastTouchMs = remember { mutableStateOf(System.currentTimeMillis()) }
+    val quickControlsLastTouchMs = remember { mutableLongStateOf(System.currentTimeMillis()) }
     fun pingQuickControls() { quickControlsLastTouchMs.value = System.currentTimeMillis() }
 
     // Auto-hide quick controls after a short timeout

@@ -1,6 +1,7 @@
 package com.oscaribarra.neoplanner.ui
 
 import android.Manifest
+import androidx.compose.ui.tooling.preview.Preview
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -44,7 +45,7 @@ import com.oscaribarra.neoplanner.ui.tabs.SettingsSheet
 import java.time.format.DateTimeFormatter
 
 private enum class MainTab { Planner, Results, Pointing, Camera }
-
+@Preview
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
