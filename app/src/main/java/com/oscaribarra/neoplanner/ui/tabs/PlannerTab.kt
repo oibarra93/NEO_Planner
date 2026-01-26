@@ -92,10 +92,8 @@ fun PlannerTab(
                 )
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onFetch, enabled = !st.isBusy) {
-                        Text(if (st.isBusy) "Working…" else "Fetch (debug)")
-                    }
-                    Button(onClick = onPlan, enabled = !st.isBusy) { Text("Plan Visibility") }
+
+                    Button(onClick = onPlan, enabled = !st.isBusy) { Text("Fetch NEOs and Plan Visibility") }
                 }
             }
         }

@@ -67,6 +67,8 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation(libs.androidx.ui.tooling.preview)
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material3:material3:1.3.0-beta05")
+
     debugImplementation(libs.androidx.ui.tooling)
     // build.gradle.kts: preview dependencies
     implementation(libs.androidx.ui.tooling.preview) // ui-tooling-preview

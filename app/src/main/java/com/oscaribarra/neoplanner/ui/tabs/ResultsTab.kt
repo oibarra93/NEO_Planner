@@ -2,7 +2,9 @@ package com.oscaribarra.neoplanner.ui.tabs
 
 import android.os.Build
 import androidx.annotation.RequiresApi
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,15 +18,20 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
+//import androidx.compose.material3.ExposedDropdownMenu
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshState
+import androidx.compose.material3.pulltorefresh.pullToRefresh
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -39,13 +46,12 @@ import com.oscaribarra.neoplanner.ui.NeoPlannerUiState
 import com.oscaribarra.neoplanner.ui.pointing.TargetAltAz
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
-import androidx.compose.foundation.clickable // <-- add this
 
 // Enums for tab state and sort order
 enum class ResultsMode { Planned, Raw }
 enum class PlannedSort { BestPeakAlt, DistanceAu, PeakTime }
 
-// Map of planet command IDs to human‑friendly names
+// Map of planet command IDs to human-friendly names
 private val PLANET_NAMES: Map<Int, String> = mapOf(
     199 to "Mercury",
     299 to "Venus",
@@ -70,15 +76,14 @@ fun ResultsTab(
     onOpenPointing: (String) -> Unit,
     onOpenCamera: (String) -> Unit,
     onOpenNeoDetails: (String) -> Unit,
-    selectedPlanetCommand: Int?,        // <— NEW
-    onSelectPlanet: (Int?) -> Unit
+    selectedPlanetCommand: Int?,
+    onSelectPlanet: (Int?) -> Unit,
+    onRefresh: () -> Unit,
+    refreshEnabled: Boolean = true
 ) {
     // Bottom sheet selection (NEOs + Moon + Planets)
     var sheetNeoId by remember { mutableStateOf<String?>(null) }
     var sheetNeoName by remember { mutableStateOf<String?>(null) }
-
-    // Local planet selection for the dropdown (keeps this file self-contained)
-    //var selectedPlanetCommand by remember { mutableStateOf<Int?>(null) }
 
     // Show bottom sheet when a NEO/Moon/planet is selected
     if (sheetNeoId != null) {
@@ -120,7 +125,11 @@ fun ResultsTab(
                 // NASA/JPL details only makes sense for NEOs (not Moon/planets in this UI)
                 if (id != "MOON" && !id.startsWith("PLANET_")) {
                     OutlinedButton(
-                        onClick = { onOpenNeoDetails(id) },
+                        onClick = {
+                            sheetNeoId = null
+                            sheetNeoName = null
+                            onOpenNeoDetails(id)
+                        },
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("View NASA/JPL Details") }
                 }
@@ -130,23 +139,28 @@ fun ResultsTab(
         }
     }
 
+    // Keep only those with at least one visibility window
+    val visiblePlanned = remember(st.planned) {
+        st.planned.filter { it.visibleWindowCount > 0 }
+    }
+
     // Sort the planned results based on current sort selection
-    val plannedSorted = remember(st.planned, plannedSort) {
+    val plannedSorted = remember(visiblePlanned, plannedSort) {
         when (plannedSort) {
             PlannedSort.BestPeakAlt ->
-                st.planned.sortedWith(
+                visiblePlanned.sortedWith(
                     compareByDescending<PlannedNeoResult> { it.peakAltitudeDeg ?: Double.NEGATIVE_INFINITY }
                         .thenBy { it.neo.name }
                 )
 
             PlannedSort.DistanceAu ->
-                st.planned.sortedWith(
+                visiblePlanned.sortedWith(
                     compareBy<PlannedNeoResult> { it.neo.closestApproachAu ?: Double.POSITIVE_INFINITY }
                         .thenBy { it.neo.name }
                 )
 
             PlannedSort.PeakTime ->
-                st.planned.sortedWith(
+                visiblePlanned.sortedWith(
                     compareBy<PlannedNeoResult> { it.peakTimeLocal ?: ZonedDateTime.now().plusYears(100) }
                         .thenBy { it.neo.name }
                 )
@@ -170,205 +184,226 @@ fun ResultsTab(
         val sel = selectedPlanetCommand ?: return@LaunchedEffect
         val stillThere = planetsInView.any { it.first == sel }
         if (!stillThere) onSelectPlanet(null)
-
     }
 
-    Column(
+    // ✅ Material3 pull-to-refresh
+    val pullState: PullToRefreshState = rememberPullToRefreshState()
+
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(12.dp)
-    ) {
-        // Header: Title + mode chips
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                when (mode) {
-                    ResultsMode.Planned -> "Planned Results"
-                    ResultsMode.Raw -> "Raw NeoWs Results"
+            .pullToRefresh(
+                isRefreshing = st.isBusy,
+                state = pullState,
+                onRefresh = {
+                    if (refreshEnabled && !st.isBusy) onRefresh()
                 },
-                style = MaterialTheme.typography.titleMedium
+                enabled = refreshEnabled
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(
-                    selected = mode == ResultsMode.Planned,
-                    onClick = { onModeChange(ResultsMode.Planned) },
-                    label = { Text("Planned") }
-                )
-                FilterChip(
-                    selected = mode == ResultsMode.Raw,
-                    onClick = { onModeChange(ResultsMode.Raw) },
-                    label = { Text("Raw") }
-                )
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
-
-        // Moon card
-        ElevatedCard(
+    ) {
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .clickable {
-                    sheetNeoId = "MOON"
-                    sheetNeoName = "Moon"
-                }
+                .fillMaxSize()
+                .padding(12.dp)
         ) {
-            Column(
-                Modifier.padding(10.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+            // Header: Title + mode chips
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Moon", style = MaterialTheme.typography.titleSmall)
-                val mt = st.moonTarget
-                if (mt != null) {
-                    Text(mt.label, style = MaterialTheme.typography.bodySmall)
-                    Text(
-                        "Alt: ${"%.2f".format(mt.altitudeDeg)}°  |  Az: ${"%.2f".format(mt.azimuthDegTrue)}°",
-                        style = MaterialTheme.typography.bodySmall
+                Text(
+                    when (mode) {
+                        ResultsMode.Planned -> "Planned Results"
+                        ResultsMode.Raw -> "Raw NeoWs Results"
+                    },
+                    style = MaterialTheme.typography.titleMedium
+                )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = mode == ResultsMode.Planned,
+                        onClick = { onModeChange(ResultsMode.Planned) },
+                        label = { Text("Planned") }
                     )
-                } else {
-                    val err = st.moonError
-                    Text(
-                        err ?: "Fetching Moon… (requires observer/location)",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (err != null) MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    FilterChip(
+                        selected = mode == ResultsMode.Raw,
+                        onClick = { onModeChange(ResultsMode.Raw) },
+                        label = { Text("Raw") }
                     )
                 }
             }
-        }
 
-        Spacer(Modifier.height(10.dp))
-
-        // Planets dropdown (only enabled if there are planets above the horizon)
-        PlanetDropdown(
-            planetsInView = planetsInView,
-            selectedCommand = selectedPlanetCommand,
-            onSelect = { cmd -> onSelectPlanet(cmd) },
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        // Selected planet card (shows details if a planet is chosen)
-        val selectedPlanetAltAz: TargetAltAz? = remember(selectedPlanetCommand, st.planetTargets) {
-            val cmd = selectedPlanetCommand ?: return@remember null
-            st.planetTargets[cmd]
-        }
-        if (selectedPlanetCommand != null && selectedPlanetAltAz != null) {
             Spacer(Modifier.height(8.dp))
-            val cmd = selectedPlanetCommand!!
-            val name = PLANET_NAMES[cmd] ?: "Planet $cmd"
+
+            // Moon card
             ElevatedCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable {
-                        sheetNeoId = "PLANET_$cmd"
-                        sheetNeoName = name
+                        sheetNeoId = "MOON"
+                        sheetNeoName = "Moon"
                     }
             ) {
                 Column(
                     Modifier.padding(10.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Text(name, style = MaterialTheme.typography.titleSmall)
-                    Text(selectedPlanetAltAz.label, style = MaterialTheme.typography.bodySmall)
-                    Text(
-                        "Alt: ${"%.2f".format(selectedPlanetAltAz.altitudeDeg)}°  |  Az: ${"%.2f".format(selectedPlanetAltAz.azimuthDegTrue)}°",
-                        style = MaterialTheme.typography.bodySmall
+                    Text("Moon", style = MaterialTheme.typography.titleSmall)
+                    val mt = st.moonTarget
+                    if (mt != null) {
+                        Text(mt.label, style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            "Alt: ${"%.2f".format(mt.altitudeDeg)}°  |  Az: ${"%.2f".format(mt.azimuthDegTrue)}°",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    } else {
+                        val err = st.moonError
+                        Text(
+                            err ?: "Fetching Moon… (requires observer/location)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (err != null) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            // Planets dropdown (only enabled if there are planets above the horizon)
+            PlanetDropdown(
+                planetsInView = planetsInView,
+                selectedCommand = selectedPlanetCommand,
+                onSelect = { cmd -> onSelectPlanet(cmd) },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // Selected planet card (shows details if a planet is chosen)
+            val selectedPlanetAltAz: TargetAltAz? = remember(selectedPlanetCommand, st.planetTargets) {
+                val cmd = selectedPlanetCommand ?: return@remember null
+                st.planetTargets[cmd]
+            }
+
+            if (selectedPlanetCommand != null && selectedPlanetAltAz != null) {
+                Spacer(Modifier.height(8.dp))
+                val cmd = selectedPlanetCommand
+                val name = PLANET_NAMES[cmd] ?: "Planet $cmd"
+
+                ElevatedCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            sheetNeoId = "PLANET_$cmd"
+                            sheetNeoName = name
+                        }
+                ) {
+                    Column(
+                        Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(name, style = MaterialTheme.typography.titleSmall)
+                        Text(selectedPlanetAltAz.label, style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            "Alt: ${"%.2f".format(selectedPlanetAltAz.altitudeDeg)}°  |  Az: ${"%.2f".format(selectedPlanetAltAz.azimuthDegTrue)}°",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            // Sort chips for planned results
+            if (mode == ResultsMode.Planned && visiblePlanned.isNotEmpty()) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Sort:", style = MaterialTheme.typography.bodyMedium)
+
+                    FilterChip(
+                        selected = plannedSort == PlannedSort.BestPeakAlt,
+                        onClick = { onPlannedSortChange(PlannedSort.BestPeakAlt) },
+                        label = { Text("Best") }
+                    )
+                    FilterChip(
+                        selected = plannedSort == PlannedSort.DistanceAu,
+                        onClick = { onPlannedSortChange(PlannedSort.DistanceAu) },
+                        label = { Text("Distance") }
+                    )
+                    FilterChip(
+                        selected = plannedSort == PlannedSort.PeakTime,
+                        onClick = { onPlannedSortChange(PlannedSort.PeakTime) },
+                        label = { Text("Peak time") }
                     )
                 }
+
+                Spacer(Modifier.height(8.dp))
             }
-        }
 
-        Spacer(Modifier.height(10.dp))
-
-        // Sort chips for planned results
-        if (mode == ResultsMode.Planned && st.planned.isNotEmpty()) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Sort:", style = MaterialTheme.typography.bodyMedium)
-                FilterChip(
-                    selected = plannedSort == PlannedSort.BestPeakAlt,
-                    onClick = { onPlannedSortChange(PlannedSort.BestPeakAlt) },
-                    label = { Text("Best") }
-                )
-                FilterChip(
-                    selected = plannedSort == PlannedSort.DistanceAu,
-                    onClick = { onPlannedSortChange(PlannedSort.DistanceAu) },
-                    label = { Text("Distance") }
-                )
-                FilterChip(
-                    selected = plannedSort == PlannedSort.PeakTime,
-                    onClick = { onPlannedSortChange(PlannedSort.PeakTime) },
-                    label = { Text("Peak time") }
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-        }
-
-        // Results list depending on mode
-        when (mode) {
-            ResultsMode.Planned -> {
-                if (st.planned.isEmpty()) {
-                    Text("No planned results yet. Go to Planner and tap “Plan Visibility”.")
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(plannedSorted) { item ->
-                            ElevatedCard(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        sheetNeoId = item.neo.id
-                                        sheetNeoName = item.neo.name
-                                    }
-                            ) {
-                                Column(
-                                    Modifier.padding(10.dp),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+            // Results list depending on mode
+            when (mode) {
+                ResultsMode.Planned -> {
+                    if (plannedSorted.isEmpty()) {
+                        Text("No visible planned results yet. Try extending the horizon or lowering the altitude limit.")
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(plannedSorted) { item ->
+                                ElevatedCard(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            sheetNeoId = item.neo.id
+                                            sheetNeoName = item.neo.name
+                                        }
                                 ) {
-                                    Text(item.neo.name, style = MaterialTheme.typography.titleSmall)
-                                    Text("Hazardous: ${if (item.neo.isHazardous) "Yes" else "No"} | H: ${item.neo.hMagnitude ?: "—"}")
-                                    Text("Closest: ${item.neo.closestApproachAu ?: "—"} AU @ ${item.neo.closestApproachLocal?.format(timeFmt) ?: "—"}")
-                                    Text("Best: ${item.bestStartLocal?.format(timeFmt) ?: "—"} → ${item.bestEndLocal?.format(timeFmt) ?: "—"}")
-                                    val peakAlt = item.peakAltitudeDeg?.let { "%.2f°".format(it) } ?: "—"
-                                    val peakAz = item.peakAzimuthDeg?.let { "%.2f°".format(it) } ?: "—"
-                                    Text("Peak: $peakAlt @ ${item.peakTimeLocal?.format(timeFmt) ?: "—"}  |  Az: $peakAz ${item.peakCardinal ?: ""}")
+                                    Column(
+                                        Modifier.padding(10.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Text(item.neo.name, style = MaterialTheme.typography.titleSmall)
+                                        Text("Hazardous: ${if (item.neo.isHazardous) "Yes" else "No"} | H: ${item.neo.hMagnitude ?: "—"}")
+                                        Text("Closest: ${item.neo.closestApproachAu ?: "—"} AU @ ${item.neo.closestApproachLocal?.format(timeFmt) ?: "—"}")
+                                        Text("Best: ${item.bestStartLocal?.format(timeFmt) ?: "—"} → ${item.bestEndLocal?.format(timeFmt) ?: "—"}")
+                                        val peakAlt = item.peakAltitudeDeg?.let { "%.2f°".format(it) } ?: "—"
+                                        val peakAz = item.peakAzimuthDeg?.let { "%.2f°".format(it) } ?: "—"
+                                        Text("Peak: $peakAlt @ ${item.peakTimeLocal?.format(timeFmt) ?: "—"}  |  Az: $peakAz ${item.peakCardinal ?: ""}")
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
-            ResultsMode.Raw -> {
-                if (st.results.isEmpty()) {
-                    Text("No raw results yet. Go to Planner and tap “Fetch (debug)”.")
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(st.results) { neo ->
-                            ElevatedCard(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        sheetNeoId = neo.id
-                                        sheetNeoName = neo.name
-                                    }
-                            ) {
-                                Column(
-                                    Modifier.padding(10.dp),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+
+                ResultsMode.Raw -> {
+                    if (st.results.isEmpty()) {
+                        Text("No raw results yet. Pull to refresh to fetch + plan.")
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(st.results) { neo ->
+                                ElevatedCard(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            sheetNeoId = neo.id
+                                            sheetNeoName = neo.name
+                                        }
                                 ) {
-                                    Text(neo.name, style = MaterialTheme.typography.titleSmall)
-                                    Text("Hazardous: ${if (neo.isHazardous) "Yes" else "No"} | H: ${neo.hMagnitude ?: "—"}")
-                                    Text("Closest: ${neo.closestApproachAu ?: "—"} AU @ ${neo.closestApproachLocal?.format(timeFmt) ?: "—"}")
+                                    Column(
+                                        Modifier.padding(10.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Text(neo.name, style = MaterialTheme.typography.titleSmall)
+                                        Text("Hazardous: ${if (neo.isHazardous) "Yes" else "No"} | H: ${neo.hMagnitude ?: "—"}")
+                                        Text("Closest: ${neo.closestApproachAu ?: "—"} AU @ ${neo.closestApproachLocal?.format(timeFmt) ?: "—"}")
+                                    }
                                 }
                             }
                         }
@@ -376,15 +411,18 @@ fun ResultsTab(
                 }
             }
         }
+
+        // ✅ Indicator (note: requires BOTH state + isRefreshing)
+        PullToRefreshDefaults.Indicator(
+            state = pullState,
+            isRefreshing = st.isBusy,
+            modifier = Modifier.align(Alignment.TopCenter)
+        )
     }
 }
 
 /**
- * A composable displaying a read‑only dropdown for selecting a planet in view.  Uses
- * ExposedDropdownMenuBox/ExposedDropdownMenu from Material3 to properly anchor the
- * menu to the text field.  The dropdown is disabled if there are no planets above
- * the horizon.  Selecting an entry invokes [onSelect] with the planet’s command ID
- * (or null for “None”).
+ * Read-only dropdown for selecting a planet in view.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -395,13 +433,13 @@ private fun PlanetDropdown(
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
-    // Determine the display label based on selection and visibility
+
     val label = when {
         planetsInView.isEmpty() -> "No planets in view"
         selectedCommand == null -> "Select planet (in view)"
         else -> PLANET_NAMES[selectedCommand] ?: "Planet $selectedCommand"
     }
-    // Wrap field and menu in ExposedDropdownMenuBox for proper anchoring
+
     ExposedDropdownMenuBox(
         expanded = expanded,
         onExpandedChange = { expanded = it },
@@ -416,13 +454,17 @@ private fun PlanetDropdown(
             singleLine = true,
             modifier = Modifier
                 .fillMaxWidth()
-                .menuAnchor()
+                .menuAnchor(
+                    type = ExposedDropdownMenuAnchorType.PrimaryEditable,
+                    enabled = planetsInView.isNotEmpty()
+                )
+
         )
+
         ExposedDropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false }
         ) {
-            // Always provide a “None” option
             DropdownMenuItem(
                 text = { Text("None") },
                 onClick = {
@@ -430,10 +472,11 @@ private fun PlanetDropdown(
                     expanded = false
                 }
             )
-            // List each planet above the horizon
+
             for ((cmd, altAz) in planetsInView) {
                 val name = PLANET_NAMES[cmd] ?: "Planet $cmd"
                 val sub = "Az ${"%.1f".format(altAz.azimuthDegTrue)}° • Alt ${"%.1f".format(altAz.altitudeDeg)}°"
+
                 DropdownMenuItem(
                     text = {
                         Column {

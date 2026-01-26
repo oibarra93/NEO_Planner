@@ -184,10 +184,23 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
                     st = st,
                     timeFmt = timeFmt,
                     selected = selectedPlanned,
-                    onFetch = vm::fetchNeosNow,
+                    onFetch = {
+                        // Run plan visibility and switch to Results tab
+                        vm.fetchAndPlan(
+                            appContext = context.applicationContext,
+                            req = PlanRequest(
+                                hoursAhead = st.hoursAhead,
+                                stepMinutes = st.stepMinutes,
+                                minAltDeg = st.minAltDeg,
+                                twilightLimitDeg = st.twilightLimitDeg,
+                                maxNeos = st.maxNeos
+                            )
+                        )
+                        tab = MainTab.Results
+                    },
                     onPlan = {
                         // Run plan visibility and switch to Results tab
-                        vm.planVisibility(
+                        vm.fetchAndPlan(
                             appContext = context.applicationContext,
                             req = PlanRequest(
                                 hoursAhead = st.hoursAhead,
@@ -211,6 +224,16 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
                     mode = mode,
                     onModeChange = { mode = it },
                     plannedSort = plannedSort,
+                    onRefresh = {vm.fetchAndPlan(
+                            appContext = context.applicationContext,
+                        req = PlanRequest(
+                            hoursAhead = st.hoursAhead,
+                            stepMinutes = st.stepMinutes,
+                            minAltDeg = st.minAltDeg,
+                            twilightLimitDeg = st.twilightLimitDeg,
+                            maxNeos = st.maxNeos))},
+
+                    refreshEnabled = true,
                     onPlannedSortChange = { plannedSort = it },
                     onOpenPointing = { id ->
                         vm.selectNeo(id)

@@ -441,7 +441,30 @@ class NeoPlannerViewModel(
                 planned = planned,
                 error = null
             )
-            android.util.Log.i("NEO-PLAN", "Planned=${planned.size} top=${planned.firstOrNull()?.neo?.name}")
+
+            // -----------------------------------------------------------------
+            // Verbose debugging: log summary of the planned results.  We log
+            // the total number of planned NEOs and then one line per result
+            // showing the NEO name, number of visibility windows, peak altitude,
+            // peak time (local), best start/end times (local), peak azimuth
+            // and pointing hint.  This helps identify why some cards lack
+            // pointing or time information (i.e. peakAltitudeDeg or
+            // peakTimeLocal is null).
+            android.util.Log.i(
+                "DEBUG-PLAN-VISIBILITY",
+                "Planned=${planned.size} NEOs. Top=${planned.firstOrNull()?.neo?.name}"
+            )
+            for (res in planned) {
+                val msg = StringBuilder()
+                msg.append("NEO ${res.neo.name} windows=${res.visibleWindowCount}")
+                msg.append(" peakAlt=${res.peakAltitudeDeg}")
+                msg.append(" peakTime=${res.peakTimeLocal}")
+                msg.append(" bestStart=${res.bestStartLocal}")
+                msg.append(" bestEnd=${res.bestEndLocal}")
+                msg.append(" peakAz=${res.peakAzimuthDeg}")
+                msg.append(" hint=${res.pointingHint}")
+                android.util.Log.i("DEBUG-PLAN-VISIBILITY", msg.toString())
+            }
         } catch (e: Exception) {
             _state.value = _state.value.copy(
                 isBusy = false,
@@ -609,6 +632,42 @@ class NeoPlannerViewModel(
             }
         }
     }
+    @RequiresApi(Build.VERSION_CODES.O)
+    fun fetchAndPlan(appContext: Context, req: PlanRequest) = viewModelScope.launch {
+        // set busy and clear errors
+        _state.value = _state.value.copy(isBusy = true, error = null)
+        try {
+            // fetch the NEO feed and details
+            fetchNeosNowInternal()
+
+            // re‑enable busy flag after fetchNeosNowInternal() resets it
+            _state.value = _state.value.copy(isBusy = true)
+
+            // run the visibility planner with the freshly downloaded NEOs
+            val obs = _state.value.observer ?: error("Observer not available.")
+            val nowLocal = _state.value.nowLocal ?: ZonedDateTime.now(ZoneId.of(obs.timeZoneId))
+            val planned = VisibilityPlanner(appContext).plan(
+                observer = obs,
+                neos = _state.value.results,
+                request = req,
+                nowLocal = nowLocal
+            )
+            // refresh Moon and update state
+            refreshMoonInternal(obs)
+            _state.value = _state.value.copy(
+                isBusy = false,
+                planned = planned,
+                error = null
+            )
+        } catch (e: Exception) {
+            _state.value = _state.value.copy(
+                isBusy = false,
+                planned = emptyList(),
+                error = e.message ?: "Fetch+Plan failed"
+            )
+        }
+    }
+
 
     // -------------------------
     // Fetch NEOs (debug)
@@ -660,6 +719,25 @@ class NeoPlannerViewModel(
             results = details,
             error = null
         )
+
+        // -----------------------------------------------------------------
+        // Verbose debugging: log each NEO fetched and its key properties.
+        // This helps diagnose issues where some cards display missing data.
+        // We log the number of details fetched followed by one line per NEO
+        // containing its id, name, hazard flag, absolute magnitude (H),
+        // closest approach distance (AU) and time (local).  These values
+        // correspond to what is displayed in the Results tab before planning.
+        android.util.Log.i(
+            "DEBUG-NEO-FETCH",
+            "Fetched ${details.size} NEOs from NeoWs feed"
+        )
+        for (neo in details) {
+            android.util.Log.i(
+                "DEBUG-NEO-FETCH",
+                "NEO ${neo.name} (id=${neo.id}) hazard=${neo.isHazardous} H=${neo.hMagnitude} " +
+                        "closestAU=${neo.closestApproachAu} closestLocal=${neo.closestApproachLocal}"
+            )
+        }
         // 🌙 refresh Moon too
         refreshMoonInternal(observer)
         // 🪐 refresh planets and update planetTargets after fetching NEOs.  This call
