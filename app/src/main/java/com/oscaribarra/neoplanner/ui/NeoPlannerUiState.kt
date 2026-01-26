@@ -44,7 +44,12 @@ data class NeoPlannerUiState(
     val planetError: String? = null,
 
     // Optional if you want selection in UI:
-    val selectedPlanetCommand: Int? = null
+    val selectedPlanetCommand: Int? = null,
 
-)
+    val azOffsetDeg: Double = 0.0,
+    val altOffsetDeg: Double = 0.0,
+    val isCalibrating: Boolean = false,
+
+
+    )
 

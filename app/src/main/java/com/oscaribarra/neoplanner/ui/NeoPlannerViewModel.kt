@@ -13,6 +13,8 @@ import com.oscaribarra.neoplanner.data.repo.NeoRepository
 import com.oscaribarra.neoplanner.planner.PlanRequest
 import com.oscaribarra.neoplanner.planner.VisibilityPlanner
 import com.oscaribarra.neoplanner.ui.pointing.TargetAltAz
+import com.oscaribarra.neoplanner.ui.pointing.OrientationTracker
+import com.oscaribarra.neoplanner.ui.pointing.OrientationMath
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -52,14 +54,23 @@ class NeoPlannerViewModel(
     private val dateFmt = DateTimeFormatter.ISO_LOCAL_DATE
 
     init {
-        // Load saved API key
+        // Load saved API key and calibration offsets on startup
         viewModelScope.launch {
             try {
+                // Load API key
                 val savedKey = settings.getNeoWsApiKey()
-                _state.value = _state.value.copy(
+                var newState = _state.value.copy(
                     apiKey = savedKey,
                     apiKeySaved = savedKey.isNotBlank()
                 )
+                // Load persisted orientation offsets.  If not set, defaults to 0.0.
+                val azOff = settings.getAzOffsetDeg()
+                val altOff = settings.getAltOffsetDeg()
+                newState = newState.copy(
+                    azOffsetDeg = azOff,
+                    altOffsetDeg = altOff
+                )
+                _state.value = newState
             } catch (e: Exception) {
                 _state.value = _state.value.copy(
                     error = e.message ?: "Failed to load saved settings"
@@ -140,6 +151,52 @@ class NeoPlannerViewModel(
 
     fun selectPlanet(commandId: Int?) {
         _state.value = _state.value.copy(selectedPlanetCommand = commandId)
+    }
+
+    // ---------------------------------------------------------------------
+    // Calibration API
+    // ---------------------------------------------------------------------
+    /**
+     * Begin the calibration process.  While calibrating, the UI should show
+     * a special overlay instructing the user to align the moon at the center
+     * of the view.  Standard pointing guidance is disabled until the
+     * calibration is either completed or cancelled.
+     */
+    fun startCalibration() {
+        _state.value = _state.value.copy(isCalibrating = true)
+    }
+
+    /** Cancel calibration and revert to normal pointing mode. */
+    fun cancelCalibration() {
+        _state.value = _state.value.copy(isCalibrating = false)
+    }
+
+    /**
+     * Complete calibration by computing orientation offsets from the provided
+     * sensor sample and target.  The offsets are persisted to settings and
+     * applied to future pointing sessions.  After completion, calibration
+     * mode ends.
+     *
+     * @param sample current orientation sample from sensors (unadjusted)
+     * @param target the expected Moon position at the same moment
+     */
+    fun completeCalibration(sample: OrientationTracker.OrientationSample, target: TargetAltAz) {
+        viewModelScope.launch {
+            // Compute signed azimuth offset in degrees.  Use deltaAngleDeg to
+            // handle wrap-around at 0/360.  Positive offset means measured
+            // azimuth + offset = true target azimuth.
+            val azOffset = OrientationMath.deltaAngleDeg(sample.azimuthDegTrue, target.azimuthDegTrue)
+            // Compute altitude offset (target minus measured).
+            val altOffset = target.altitudeDeg - sample.altitudeDegCamera
+            // Persist and update state
+            settings.setAzOffsetDeg(azOffset)
+            settings.setAltOffsetDeg(altOffset)
+            _state.value = _state.value.copy(
+                azOffsetDeg = azOffset,
+                altOffsetDeg = altOffset,
+                isCalibrating = false
+            )
+        }
     }
 
     @RequiresApi(Build.VERSION_CODES.O)

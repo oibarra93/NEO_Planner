@@ -28,12 +28,11 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Camera pointing UI:
- * - Shows current camera Alt/Az (true)
- * - Shows target Alt/Az (true)
- * - Provides strong alignment indicators + simple instructions
+ * Camera pointing UI with calibration offsets applied.
  *
- * No debug telemetry shown (pitch/roll/declination/etc).
+ * This variant accepts azimuth/altitude offsets that are added to the
+ * measured orientation to compensate for systematic bias.  Offsets are
+ * typically computed via a calibration routine in the Camera UI.
  */
 @Composable
 fun PointingTab(
@@ -42,7 +41,9 @@ fun PointingTab(
     obsHeightMeters: Double?,
     targetAltAz: TargetAltAz?,
     onJumpToResults: () -> Unit,
-    onOpenCameraTab: (() -> Unit)? = null
+    onOpenCameraTab: (() -> Unit)? = null,
+    azOffsetDeg: Double = 0.0,
+    altOffsetDeg: Double = 0.0
 ) {
     val context = LocalContext.current
 
@@ -74,7 +75,7 @@ fun PointingTab(
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // CONTENT (top)
+        // Header
         Header()
 
         errorState.value?.let { err ->
@@ -89,7 +90,7 @@ fun PointingTab(
 
         val s = sampleState.value
 
-        // If no target, show simple instruction.
+        // If no target, show simple instruction and current orientation
         if (targetAltAz == null) {
             Card {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -98,8 +99,8 @@ fun PointingTab(
                     if (s == null) {
                         Text("Waiting for sensors…")
                     } else {
-                        val azStr = "%.1f°".format(s.azimuthDegTrue)
-                        val altStr = "%.1f°".format(s.altitudeDegCamera)
+                        val azStr = "%.1f°".format(s.azimuthDegTrue + azOffsetDeg)
+                        val altStr = "%.1f°".format(s.altitudeDegCamera + altOffsetDeg)
                         Text("Current: Az $azStr • Alt $altStr")
                     }
                 }
@@ -117,13 +118,17 @@ fun PointingTab(
         // Target + live cards
         TargetAndLiveCards(
             sample = s,
-            target = targetAltAz
+            target = targetAltAz,
+            azOffset = azOffsetDeg,
+            altOffset = altOffsetDeg
         )
 
         // Guidance
         GuidanceCard(
             sample = s,
-            target = targetAltAz
+            target = targetAltAz,
+            azOffset = azOffsetDeg,
+            altOffset = altOffsetDeg
         )
 
         // Short safety / calibration hint (small + non-debug)
@@ -198,7 +203,9 @@ private fun BottomActions(
 @Composable
 private fun TargetAndLiveCards(
     sample: OrientationTracker.OrientationSample?,
-    target: TargetAltAz
+    target: TargetAltAz,
+    azOffset: Double,
+    altOffset: Double
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -219,8 +226,10 @@ private fun TargetAndLiveCards(
                 if (sample == null) {
                     Text("Waiting…")
                 } else {
-                    Text("Az: ${"%.1f".format(sample.azimuthDegTrue)}°")
-                    Text("Alt: ${"%.1f".format(sample.altitudeDegCamera)}°")
+                    val correctedAz = sample.azimuthDegTrue + azOffset
+                    val correctedAlt = sample.altitudeDegCamera + altOffset
+                    Text("Az: ${"%.1f".format(correctedAz)}°")
+                    Text("Alt: ${"%.1f".format(correctedAlt)}°")
                 }
             }
         }
@@ -230,7 +239,9 @@ private fun TargetAndLiveCards(
 @Composable
 private fun GuidanceCard(
     sample: OrientationTracker.OrientationSample?,
-    target: TargetAltAz
+    target: TargetAltAz,
+    azOffset: Double,
+    altOffset: Double
 ) {
     if (sample == null) {
         ElevatedCard {
@@ -242,12 +253,15 @@ private fun GuidanceCard(
         return
     }
 
-    val dAz = OrientationMath.deltaAngleDeg(sample.azimuthDegTrue, target.azimuthDegTrue)
-    val dAlt = target.altitudeDeg - sample.altitudeDegCamera
+    val correctedAz = sample.azimuthDegTrue + azOffset
+    val correctedAlt = sample.altitudeDegCamera + altOffset
+
+    val dAz = OrientationMath.deltaAngleDeg(correctedAz, target.azimuthDegTrue)
+    val dAlt = target.altitudeDeg - correctedAlt
 
     val err = OrientationMath.aimErrorDeg(
-        currAzTrue = sample.azimuthDegTrue,
-        currAlt = sample.altitudeDegCamera,
+        currAzTrue = correctedAz,
+        currAlt = correctedAlt,
         targetAzTrue = target.azimuthDegTrue,
         targetAlt = target.altitudeDeg
     )

@@ -1,12 +1,9 @@
 package com.oscaribarra.neoplanner.ui.camera
 
 import android.content.ContentValues
-import androidx.compose.ui.tooling.preview.Preview
 import android.content.Context
 import android.hardware.camera2.CaptureRequest
 import android.net.Uri
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
@@ -41,13 +38,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -74,6 +72,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.tooling.preview.PreviewParameter
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -85,6 +84,7 @@ import com.oscaribarra.neoplanner.ui.pointing.OrientationTracker
 import com.oscaribarra.neoplanner.ui.pointing.TargetAltAz
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Executor
@@ -95,20 +95,33 @@ private enum class ControlsTab { Zoom, Exposure, Focus, ISO }
 private enum class SidePanel { None, Align, Controls }
 
 /**
- * Fullscreen camera overlay (Dialog):
- * - Floating shutter always visible bottom-center
- * - ONLY ONE side panel open at a time (Align OR Controls)
- * - Each panel is scrollable to prevent overlapping text
- * - Each panel has "<" button to collapse ALL panels
+ * Fullscreen camera overlay (Dialog).  Supports calibration via a green box overlay
+ * similar to [CameraTab].  When calibration is active, all side panels are
+ * hidden and the calibration overlay covers the preview.  The user can
+ * confirm or cancel calibration.  Alignment guidance uses any
+ * provided orientation offsets.
+ *
+ * @param targetAltAz pointing target (NEO/Moon/planet) for alignment
+ * @param orientationSample mutable orientation sample state shared with CameraTab
+ * @param onDismiss dismiss callback
+ * @param azOffsetDeg calibration azimuth offset to apply
+ * @param altOffsetDeg calibration altitude offset to apply
+ * @param isCalibrating whether calibration overlay is active
+ * @param onStartCalibration callback when calibration is started from this screen
+ * @param onConfirmCalibration callback with sample and target when calibration confirmed
+ * @param onCancelCalibration callback when calibration cancelled
  */
-
-
-
 @Composable
 fun CameraFullScreen(
     targetAltAz: TargetAltAz?,
     orientationSample: MutableState<OrientationTracker.OrientationSample?>,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    azOffsetDeg: Double = 0.0,
+    altOffsetDeg: Double = 0.0,
+    isCalibrating: Boolean = false,
+    onStartCalibration: (() -> Unit)? = null,
+    onConfirmCalibration: ((OrientationTracker.OrientationSample, TargetAltAz) -> Unit)? = null,
+    onCancelCalibration: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -117,19 +130,15 @@ fun CameraFullScreen(
     val previewViewState = remember { mutableStateOf<PreviewView?>(null) }
     val cameraState = remember { mutableStateOf<Camera?>(null) }
     val imageCaptureState = remember { mutableStateOf<ImageCapture?>(null) }
-
     val status = remember { mutableStateOf<String?>(null) }
     val error = remember { mutableStateOf<String?>(null) }
     val isCapturing = remember { mutableStateOf(false) }
 
-    // ✅ One-panel-at-a-time state
-    val openPanel = remember { mutableStateOf(SidePanel.Align) } // default open
+    // Panel state: align vs controls; collapse after inactivity
+    val openPanel = remember { mutableStateOf(SidePanel.Align) }
     val controlsTab = remember { mutableStateOf(ControlsTab.Zoom) }
-
-    // Auto-collapse after inactivity (collapses into icons: None)
     val lastInteractionMs = remember { androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis()) }
     fun pingInteraction() { lastInteractionMs.value = System.currentTimeMillis() }
-
     LaunchedEffect(Unit) {
         while (true) {
             delay(2000)
@@ -140,7 +149,7 @@ fun CameraFullScreen(
         }
     }
 
-    // Controls state (auto-apply)
+    // Control values
     val zoom = remember { mutableFloatStateOf(1f) }
     val exposureComp = remember { mutableIntStateOf(0) }
     val autoFocus = remember { mutableStateOf(true) }
@@ -154,19 +163,11 @@ fun CameraFullScreen(
         val executor = ContextCompat.getMainExecutor(context)
         val providerFuture = ProcessCameraProvider.getInstance(context)
         var provider: ProcessCameraProvider? = null
-
         providerFuture.addListener({
             try {
                 provider = providerFuture.get()
-
-                val preview = CameraPreview.Builder().build().also { p ->
-                    p.setSurfaceProvider(pv.surfaceProvider)
-                }
-
-                val cap = ImageCapture.Builder()
-                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                    .build()
-
+                val preview = CameraPreview.Builder().build().also { p -> p.setSurfaceProvider(pv.surfaceProvider) }
+                val cap = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build()
                 provider?.unbindAll()
                 val cam = provider!!.bindToLifecycle(
                     lifecycleOwner,
@@ -174,14 +175,11 @@ fun CameraFullScreen(
                     preview,
                     cap
                 )
-
                 cameraState.value = cam
                 imageCaptureState.value = cap
-
                 cam.cameraInfo.zoomState.value?.let { zs -> zoom.floatValue = zs.zoomRatio }
                 exposureComp.intValue = cam.cameraInfo.exposureState.exposureCompensationIndex
                 applyAutoFocusMode(cam, enabled = autoFocus.value)
-
                 error.value = null
                 status.value = null
             } catch (t: Throwable) {
@@ -189,10 +187,7 @@ fun CameraFullScreen(
                 error.value = "Camera failed: ${t.message ?: t.javaClass.simpleName}"
             }
         }, executor)
-
-        onDispose {
-            try { provider?.unbindAll() } catch (_: Throwable) { }
-        }
+        onDispose { try { provider?.unbindAll() } catch (_: Throwable) { } }
     }
 
     // Auto-apply zoom
@@ -205,7 +200,6 @@ fun CameraFullScreen(
             cam.cameraControl.setZoomRatio(clamped)
         }
     }
-
     // Auto-apply exposure comp
     LaunchedEffect(Unit) {
         snapshotFlow { exposureComp.intValue }.collect { idx ->
@@ -218,7 +212,6 @@ fun CameraFullScreen(
             cam.cameraControl.setExposureCompensationIndex(clamped)
         }
     }
-
     // Auto-apply autofocus toggle
     LaunchedEffect(Unit) {
         snapshotFlow { autoFocus.value }.collect { enabled ->
@@ -226,7 +219,6 @@ fun CameraFullScreen(
             if (enabled) manualFocusDist.floatValue = 0f
         }
     }
-
     // Auto-apply manual focus
     LaunchedEffect(Unit) {
         snapshotFlow { manualFocusDist.floatValue to autoFocus.value }.collect { (dist, afOn) ->
@@ -234,21 +226,23 @@ fun CameraFullScreen(
             applyManualFocusBestEffort(cameraState.value, dist)
         }
     }
-
-    // Auto-apply ISO + exposure time (best-effort)
+    // Auto-apply ISO/exposure time
     LaunchedEffect(Unit) {
         snapshotFlow { Triple(iso.intValue, exposureUs.intValue, autoFocus.value) }.collect { (isoVal, expUs, _) ->
             applyIsoExposureBestEffort(cameraState.value, isoVal, expUs.toLong())
         }
     }
 
-    val alignText by remember(targetAltAz, orientationSample.value) {
+    // Derive align text using corrected orientation
+    val alignText by remember(targetAltAz, orientationSample.value, azOffsetDeg, altOffsetDeg) {
         derivedStateOf {
             val t = targetAltAz
             val s = orientationSample.value
             if (t == null || s == null) return@derivedStateOf "Select a target in Results."
-            val dAz = OrientationMath.deltaAngleDeg(s.azimuthDegTrue, t.azimuthDegTrue)
-            val dAlt = t.altitudeDeg - s.altitudeDegCamera
+            val correctedAz = s.azimuthDegTrue + azOffsetDeg
+            val correctedAlt = s.altitudeDegCamera + altOffsetDeg
+            val dAz = OrientationMath.deltaAngleDeg(correctedAz, t.azimuthDegTrue)
+            val dAlt = t.altitudeDeg - correctedAlt
             val aligned = abs(dAz) < 3.0 && abs(dAlt) < 3.0
             if (aligned) "✅ Aligned" else OrientationMath.aimHint(dAz, dAlt)
         }
@@ -256,11 +250,7 @@ fun CameraFullScreen(
 
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            dismissOnBackPress = true,
-            dismissOnClickOutside = false
-        )
+        properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = true, dismissOnClickOutside = false)
     ) {
         Box(
             modifier = Modifier
@@ -268,7 +258,7 @@ fun CameraFullScreen(
                 .background(Color.Black)
                 .windowInsetsPadding(WindowInsets.systemBars)
         ) {
-            // ✅ Preview full screen
+            // Full screen preview
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { ctx ->
@@ -291,8 +281,7 @@ fun CameraFullScreen(
                     }.also { pv -> previewViewState.value = pv }
                 }
             )
-
-            // Top bar (minimal)
+            // Top bar: title, error/status, Done and (optionally) Calibrate
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -305,11 +294,16 @@ fun CameraFullScreen(
                     error.value?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                     status.value?.let { Text(it, color = Color.White, style = MaterialTheme.typography.bodySmall) }
                 }
-                TextButton(onClick = onDismiss) { Text("Done") }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Show Calibrate button if applicable
+                    if (!isCalibrating && onStartCalibration != null && targetAltAz != null) {
+                        TextButton(onClick = { onStartCalibration() }) { Text("Calibrate", color = Color.White) }
+                    }
+                    TextButton(onClick = onDismiss) { Text("Done") }
+                }
             }
-
-            // Left icon (Align)
-            if (openPanel.value != SidePanel.Align) {
+            // Left side icon for Align panel
+            if (!isCalibrating && openPanel.value != SidePanel.Align) {
                 FloatingSideIcon(
                     modifier = Modifier.align(Alignment.CenterStart).padding(start = 10.dp),
                     icon = Icons.Default.CenterFocusStrong,
@@ -320,9 +314,8 @@ fun CameraFullScreen(
                     }
                 )
             }
-
-            // Right icon (Controls)
-            if (openPanel.value != SidePanel.Controls) {
+            // Right side icon for Controls panel
+            if (!isCalibrating && openPanel.value != SidePanel.Controls) {
                 FloatingSideIcon(
                     modifier = Modifier.align(Alignment.CenterEnd).padding(end = 10.dp),
                     icon = Icons.Default.Tune,
@@ -333,9 +326,8 @@ fun CameraFullScreen(
                     }
                 )
             }
-
-            // ALIGN PANEL
-            if (openPanel.value == SidePanel.Align) {
+            // Align panel
+            if (!isCalibrating && openPanel.value == SidePanel.Align) {
                 SidePanelCard(
                     modifier = Modifier
                         .align(Alignment.CenterStart)
@@ -357,24 +349,29 @@ fun CameraFullScreen(
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Text(alignText, style = MaterialTheme.typography.bodyMedium)
-
                         val t = targetAltAz
                         val s = orientationSample.value
                         if (t != null && s != null) {
-                            val dAz = OrientationMath.deltaAngleDeg(s.azimuthDegTrue, t.azimuthDegTrue)
-                            val dAlt = t.altitudeDeg - s.altitudeDegCamera
+                            val correctedAz = s.azimuthDegTrue + azOffsetDeg
+                            val correctedAlt = s.altitudeDegCamera + altOffsetDeg
+                            val dAz = OrientationMath.deltaAngleDeg(correctedAz, t.azimuthDegTrue)
+                            val dAlt = t.altitudeDeg - correctedAlt
                             Text("Turn: ${formatSignedDeg(dAz)}", style = MaterialTheme.typography.bodySmall)
                             Text("Tilt: ${formatSignedDeg(dAlt)}", style = MaterialTheme.typography.bodySmall)
                             Text(t.label, style = MaterialTheme.typography.bodySmall)
                         } else {
                             Text("Pick a planned result first.", style = MaterialTheme.typography.bodySmall)
                         }
+                        // Calibration button inside Align panel
+                        if (!isCalibrating && onStartCalibration != null && targetAltAz != null) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(onClick = { onStartCalibration() }) { Text("Calibrate") }
+                        }
                     }
                 }
             }
-
-            // CONTROLS PANEL
-            if (openPanel.value == SidePanel.Controls) {
+            // Controls panel
+            if (!isCalibrating && openPanel.value == SidePanel.Controls) {
                 SidePanelCard(
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
@@ -389,132 +386,94 @@ fun CameraFullScreen(
                     }
                 ) {
                     val scroll = rememberScrollState()
-
                     Column(
-                        modifier = Modifier.wrapContentHeight(),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(scroll),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         PrimaryTabRow(selectedTabIndex = controlsTab.value.ordinal) {
-                            Tab(
-                                selected = controlsTab.value == ControlsTab.Zoom,
-                                onClick = { controlsTab.value = ControlsTab.Zoom; pingInteraction() },
-                                text = { Text("Zoom") }
-                            )
-                            Tab(
-                                selected = controlsTab.value == ControlsTab.Exposure,
-                                onClick = { controlsTab.value = ControlsTab.Exposure; pingInteraction() },
-                                text = { Text("Exp") }
-                            )
-                            Tab(
-                                selected = controlsTab.value == ControlsTab.Focus,
-                                onClick = { controlsTab.value = ControlsTab.Focus; pingInteraction() },
-                                text = { Text("Focus") }
-                            )
-                            Tab(
-                                selected = controlsTab.value == ControlsTab.ISO,
-                                onClick = { controlsTab.value = ControlsTab.ISO; pingInteraction() },
-                                text = { Text("ISO") }
-                            )
+                            Tab(selected = controlsTab.value == ControlsTab.Zoom, onClick = { controlsTab.value = ControlsTab.Zoom; pingInteraction() }, text = { Text("Zoom") })
+                            Tab(selected = controlsTab.value == ControlsTab.Exposure, onClick = { controlsTab.value = ControlsTab.Exposure; pingInteraction() }, text = { Text("Exp") })
+                            Tab(selected = controlsTab.value == ControlsTab.Focus, onClick = { controlsTab.value = ControlsTab.Focus; pingInteraction() }, text = { Text("Focus") })
+                            Tab(selected = controlsTab.value == ControlsTab.ISO, onClick = { controlsTab.value = ControlsTab.ISO; pingInteraction() }, text = { Text("ISO") })
                         }
-
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .verticalScroll(scroll),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            when (controlsTab.value) {
-                                ControlsTab.Zoom -> {
-                                    val cam = cameraState.value
-                                    val zs = cam?.cameraInfo?.zoomState?.value
-                                    if (cam == null || zs == null) {
-                                        Text("Starting…", style = MaterialTheme.typography.bodySmall)
+                        when (controlsTab.value) {
+                            ControlsTab.Zoom -> {
+                                val cam = cameraState.value
+                                val zs = cam?.cameraInfo?.zoomState?.value
+                                if (cam == null || zs == null) {
+                                    Text("Starting…", style = MaterialTheme.typography.bodySmall)
+                                } else {
+                                    Text("Zoom: ${"%.2f".format(zoom.floatValue)}x", style = MaterialTheme.typography.bodySmall)
+                                    Slider(
+                                        value = zoom.floatValue,
+                                        onValueChange = { zoom.floatValue = it; pingInteraction() },
+                                        valueRange = zs.minZoomRatio..zs.maxZoomRatio
+                                    )
+                                }
+                            }
+                            ControlsTab.Exposure -> {
+                                val cam = cameraState.value
+                                if (cam == null) {
+                                    Text("Starting…", style = MaterialTheme.typography.bodySmall)
+                                } else {
+                                    val expState = cam.cameraInfo.exposureState
+                                    if (!expState.isExposureCompensationSupported) {
+                                        Text("Exposure comp not supported.", style = MaterialTheme.typography.bodySmall)
                                     } else {
-                                        Text("Zoom: ${"%.2f".format(zoom.floatValue)}x", style = MaterialTheme.typography.bodySmall)
+                                        val r = expState.exposureCompensationRange
+                                        Text("Exposure comp: ${exposureComp.intValue}", style = MaterialTheme.typography.bodySmall)
                                         Slider(
-                                            value = zoom.floatValue,
-                                            onValueChange = { zoom.floatValue = it; pingInteraction() },
-                                            valueRange = zs.minZoomRatio..zs.maxZoomRatio
+                                            value = exposureComp.intValue.toFloat(),
+                                            onValueChange = { exposureComp.intValue = it.toInt(); pingInteraction() },
+                                            valueRange = r.lower.toFloat()..r.upper.toFloat(),
+                                            steps = (r.upper - r.lower - 1).coerceAtLeast(0)
                                         )
                                     }
                                 }
-
-                                ControlsTab.Exposure -> {
-                                    val cam = cameraState.value
-                                    if (cam == null) {
-                                        Text("Starting…", style = MaterialTheme.typography.bodySmall)
-                                    } else {
-                                        val expState = cam.cameraInfo.exposureState
-                                        if (!expState.isExposureCompensationSupported) {
-                                            Text("Exposure comp not supported.", style = MaterialTheme.typography.bodySmall)
-                                        } else {
-                                            val r = expState.exposureCompensationRange
-                                            Text("Exposure comp: ${exposureComp.intValue}", style = MaterialTheme.typography.bodySmall)
-                                            Slider(
-                                                value = exposureComp.intValue.toFloat(),
-                                                onValueChange = { exposureComp.intValue = it.toInt(); pingInteraction() },
-                                                valueRange = r.lower.toFloat()..r.upper.toFloat(),
-                                                steps = (r.upper - r.lower - 1).coerceAtLeast(0)
-                                            )
-                                        }
-                                    }
+                            }
+                            ControlsTab.Focus -> {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Autofocus", style = MaterialTheme.typography.bodyMedium)
+                                    TextButton(onClick = { autoFocus.value = !autoFocus.value; pingInteraction() }) { Text(if (autoFocus.value) "ON" else "OFF") }
                                 }
-
-                                ControlsTab.Focus -> {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text("Autofocus", style = MaterialTheme.typography.bodyMedium)
-                                        TextButton(onClick = { autoFocus.value = !autoFocus.value; pingInteraction() }) {
-                                            Text(if (autoFocus.value) "ON" else "OFF")
-                                        }
-                                    }
-
-                                    Text(
-                                        if (autoFocus.value) "Manual focus disabled while AF is ON."
-                                        else "Manual focus distance (0=infinity; higher=closer)",
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-
-                                    Slider(
-                                        value = manualFocusDist.floatValue,
-                                        onValueChange = { manualFocusDist.floatValue = it; pingInteraction() },
-                                        valueRange = 0f..10f,
-                                        enabled = !autoFocus.value
-                                    )
-                                }
-
-                                ControlsTab.ISO -> {
-                                    Text("Manual ISO / Exposure (best-effort)", style = MaterialTheme.typography.bodySmall)
-
-                                    Text("ISO: ${iso.intValue}", style = MaterialTheme.typography.bodySmall)
-                                    Slider(
-                                        value = iso.intValue.toFloat(),
-                                        onValueChange = { iso.intValue = it.toInt().coerceIn(50, 6400); pingInteraction() },
-                                        valueRange = 50f..6400f
-                                    )
-
-                                    Text("Exposure: ${exposureUs.intValue} µs", style = MaterialTheme.typography.bodySmall)
-                                    Slider(
-                                        value = exposureUs.intValue.toFloat(),
-                                        onValueChange = { exposureUs.intValue = it.toInt().coerceIn(200, 200_000); pingInteraction() },
-                                        valueRange = 200f..200_000f
-                                    )
-
-                                    Text(
-                                        "Some phones may ignore these unless full manual control is supported.",
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-                                }
+                                Text(
+                                    if (autoFocus.value) "Manual focus disabled while AF is ON." else "Manual focus distance (0=infinity; higher=closer)",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Slider(
+                                    value = manualFocusDist.floatValue,
+                                    onValueChange = { manualFocusDist.floatValue = it; pingInteraction() },
+                                    valueRange = 0f..10f,
+                                    enabled = !autoFocus.value
+                                )
+                            }
+                            ControlsTab.ISO -> {
+                                Text("Manual ISO / Exposure (best-effort)", style = MaterialTheme.typography.bodySmall)
+                                Text("ISO: ${iso.intValue}", style = MaterialTheme.typography.bodySmall)
+                                Slider(
+                                    value = iso.intValue.toFloat(),
+                                    onValueChange = { iso.intValue = it.toInt().coerceIn(50, 6400); pingInteraction() },
+                                    valueRange = 50f..6400f
+                                )
+                                Text("Exposure: ${exposureUs.intValue} µs", style = MaterialTheme.typography.bodySmall)
+                                Slider(
+                                    value = exposureUs.intValue.toFloat(),
+                                    onValueChange = { exposureUs.intValue = it.toInt().coerceIn(200, 200_000); pingInteraction() },
+                                    valueRange = 200f..200_000f
+                                )
+                                Text("Some phones may ignore these unless full manual control is supported.", style = MaterialTheme.typography.bodySmall)
                             }
                         }
                     }
                 }
             }
-
-            // ✅ Floating shutter always visible (NOW WIRED)
+            // Floating shutter
             ShutterFab(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -529,11 +488,9 @@ fun CameraFullScreen(
                         return@ShutterFab
                     }
                     if (isCapturing.value) return@ShutterFab
-
                     isCapturing.value = true
                     error.value = null
                     status.value = "Saving photo…"
-
                     scope.launch {
                         val uri = takePhotoToMediaStore(
                             context = context,
@@ -546,11 +503,26 @@ fun CameraFullScreen(
                     }
                 }
             )
+            // Calibration overlay
+            if (isCalibrating && targetAltAz != null) {
+                CalibrationOverlay(
+                    onConfirm = {
+                        val sample = orientationSample.value
+                        if (sample != null) {
+                            onConfirmCalibration?.invoke(sample, targetAltAz)
+                        }
+                    },
+                    onCancel = {
+                        onCancelCalibration?.invoke()
+                    }
+                )
+            }
         }
     }
 }
 
 /* ---------------- UI building blocks ---------------- */
+
 @Preview
 @Composable
 private fun SidePanelCard(
@@ -631,7 +603,6 @@ private fun ShutterFab(
 
 /* ---------------- Camera2 interop helpers (device-dependent) ---------------- */
 
-
 @OptIn(ExperimentalCamera2Interop::class)
 private fun applyAutoFocusMode(camera: Camera?, enabled: Boolean) {
     if (camera == null) return
@@ -656,7 +627,6 @@ private fun applyAutoFocusMode(camera: Camera?, enabled: Boolean) {
 }
 
 @androidx.annotation.OptIn(androidx.camera.camera2.interop.ExperimentalCamera2Interop::class)
-
 private fun applyManualFocusBestEffort(camera: Camera?, focusDistance: Float) {
     if (camera == null) return
     try {
@@ -672,19 +642,16 @@ private fun applyManualFocusBestEffort(camera: Camera?, focusDistance: Float) {
 }
 
 @androidx.annotation.OptIn(androidx.camera.camera2.interop.ExperimentalCamera2Interop::class)
-
 private fun applyIsoExposureBestEffort(camera: Camera?, iso: Int, exposureTimeUs: Long) {
     if (camera == null) return
     try {
         val camera2 = Camera2CameraControl.from(camera.cameraControl)
         val exposureNs = exposureTimeUs * 1000L
-
         val opts = CaptureRequestOptions.Builder()
             .setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
             .setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, iso)
             .setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, exposureNs)
             .build()
-
         camera2.setCaptureRequestOptions(opts)
     } catch (t: Throwable) {
         Log.w("CameraFullScreen", "ISO/Exposure not supported: ${t.message}")
@@ -706,13 +673,11 @@ private suspend fun takePhotoToMediaStore(
             put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/NEOPlanner")
         }
     }
-
     val outputOptions = ImageCapture.OutputFileOptions.Builder(
         context.contentResolver,
         MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
         contentValues
     ).build()
-
     suspendTakePicture(imageCapture, outputOptions, executor)
 }
 
@@ -728,7 +693,6 @@ private suspend fun suspendTakePicture(
             override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
                 if (!cont.isCompleted) cont.resume(outputFileResults.savedUri)
             }
-
             override fun onError(exception: ImageCaptureException) {
                 Log.e("CameraFullScreen", "Photo capture failed", exception)
                 if (!cont.isCompleted) cont.resume(null)

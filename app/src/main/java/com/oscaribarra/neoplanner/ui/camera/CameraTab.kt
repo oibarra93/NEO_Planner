@@ -18,7 +18,6 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,6 +39,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.Button
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -51,8 +51,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -75,42 +77,45 @@ import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import kotlin.math.abs
 import java.util.concurrent.Executor
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.wrapContentSize
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.*
-import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.delay
-
 
 /**
- * Camera Tab:
- * - Live preview (CameraX)
- * - Tap to focus
- * - Zoom + exposure quick controls in a *small bottom popup* (no scrolling)
- * - Floating shutter always visible (bottom-center over preview)
- * - Floating fullscreen icon (top-right over preview)
+ * CameraTab displays the live camera preview and provides pointing guidance, zoom/exposure
+ * controls, and an optional calibration mode.  When calibration is active, the
+ * preview is overlaid with a green box instructing the user to align the Moon
+ * and confirm.  Once confirmed, an orientation offset is computed by the
+ * ViewModel to compensate for systematic azimuth/altitude biases.
  *
- * Notes:
- * - We "rebind" the camera after closing fullscreen to avoid the preview not resuming on some devices.
+ * @param obsLatDeg observer latitude or null if location unavailable
+ * @param obsLonDeg observer longitude or null if location unavailable
+ * @param obsHeightMeters observer elevation in metres or null
+ * @param targetAltAz the current pointing target (NEO/Moon/planet) for guidance
+ * @param onBackToResults invoked when the user taps the Results button
+ * @param azOffsetDeg calibration azimuth offset (degrees) added to measured azimuth
+ * @param altOffsetDeg calibration altitude offset (degrees) added to measured altitude
+ * @param isCalibrating true when calibration overlay should be displayed
+ * @param onStartCalibration invoked when user initiates calibration
+ * @param onConfirmCalibration invoked with sensor sample and target when user confirms calibration
+ * @param onCancelCalibration invoked when user cancels calibration
  */
-
 @Composable
 fun CameraTab(
     obsLatDeg: Double?,
     obsLonDeg: Double?,
     obsHeightMeters: Double?,
     targetAltAz: TargetAltAz?,
-    onBackToResults: () -> Unit
+    onBackToResults: () -> Unit,
+    azOffsetDeg: Double = 0.0,
+    altOffsetDeg: Double = 0.0,
+    isCalibrating: Boolean = false,
+    onStartCalibration: (() -> Unit)? = null,
+    onConfirmCalibration: ((OrientationTracker.OrientationSample, TargetAltAz) -> Unit)? = null,
+    onCancelCalibration: (() -> Unit)? = null
 ) {
-    val overlayMessage = remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
 
+    val overlayMessage = remember { mutableStateOf<String?>(null) }
     val previewViewState = remember { mutableStateOf<PreviewView?>(null) }
     val cameraState = remember { mutableStateOf<Camera?>(null) }
     val imageCaptureState = remember { mutableStateOf<ImageCapture?>(null) }
@@ -118,10 +123,10 @@ fun CameraTab(
     val errorState = remember { mutableStateOf<String?>(null) }
     val statusState = remember { mutableStateOf<String?>(null) }
 
-    // Live orientation for alignment
+    // Live orientation sample for alignment
     val orientationSample = remember { mutableStateOf<OrientationTracker.OrientationSample?>(null) }
 
-    // UI state
+    // UI state for zoom/exposure controls
     val zoomRatio = remember { mutableFloatStateOf(1f) }
     val exposureIndex = remember { mutableIntStateOf(0) }
     val showFullScreen = remember { mutableStateOf(false) }
@@ -142,19 +147,17 @@ fun CameraTab(
         }
     }
 
-    // A "rebind key" that we bump when returning from full screen to ensure camera re-binds.
+    // Rebind key used to force camera rebind when returning from fullscreen
     val rebindTick = remember { mutableIntStateOf(0) }
 
-    // Start sensors
+    // Start orientation sensors when observer parameters change
     LaunchedEffect(obsLatDeg, obsLonDeg, obsHeightMeters) {
         orientationSample.value = null
         errorState.value = null
-
         if (obsLatDeg == null || obsLonDeg == null || obsHeightMeters == null) {
             errorState.value = "Observer not available yet. Fetch location first."
             return@LaunchedEffect
         }
-
         val tracker = OrientationTracker(context)
         tracker.samples(
             obsLatDeg = obsLatDeg,
@@ -165,66 +168,55 @@ fun CameraTab(
         }
     }
 
-    // Bind camera once PreviewView exists (and rebind when rebindTick changes)
+    // Bind camera once PreviewView exists; rebind when returning from fullscreen
     DisposableEffect(previewViewState.value, lifecycleOwner, rebindTick.intValue) {
         val previewView = previewViewState.value ?: return@DisposableEffect onDispose { }
-
         val executor = ContextCompat.getMainExecutor(context)
         val providerFuture = ProcessCameraProvider.getInstance(context)
         var provider: ProcessCameraProvider? = null
-
         providerFuture.addListener({
             try {
                 provider = providerFuture.get()
-
                 val preview = Preview.Builder().build().also { p ->
                     p.setSurfaceProvider(previewView.surfaceProvider)
                 }
-
                 val imageCapture = ImageCapture.Builder()
                     .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
                     .build()
-
                 val selector = CameraSelector.DEFAULT_BACK_CAMERA
-
                 provider?.unbindAll()
                 val cam = provider!!.bindToLifecycle(lifecycleOwner, selector, preview, imageCapture)
-
                 cameraState.value = cam
                 imageCaptureState.value = imageCapture
-
-                cam.cameraInfo.zoomState.value?.let { zs ->
-                    zoomRatio.floatValue = zs.zoomRatio
-                }
+                cam.cameraInfo.zoomState.value?.let { zs -> zoomRatio.floatValue = zs.zoomRatio }
                 exposureIndex.intValue = cam.cameraInfo.exposureState.exposureCompensationIndex
-
                 errorState.value = null
             } catch (t: Throwable) {
                 Log.e("CameraTab", "Failed to bind camera", t)
                 errorState.value = "Camera failed to start: ${t.message ?: t.javaClass.simpleName}"
             }
         }, executor)
-
         onDispose {
-            try {
-                provider?.unbindAll()
-            } catch (_: Throwable) {
-                // ignore
-            }
+            try { provider?.unbindAll() } catch (_: Throwable) { }
         }
     }
 
-    // Full-screen overlay (true fullscreen dialog)
+    // Show fullscreen dialog when requested
     if (showFullScreen.value) {
         CameraFullScreen(
             targetAltAz = targetAltAz,
             orientationSample = orientationSample,
             onDismiss = {
                 showFullScreen.value = false
-                // Force a rebind on return (helps devices that "lose" preview after dialog)
                 rebindTick.intValue = rebindTick.intValue + 1
                 statusState.value = null
-            }
+            },
+            azOffsetDeg = azOffsetDeg,
+            altOffsetDeg = altOffsetDeg,
+            isCalibrating = isCalibrating,
+            onStartCalibration = onStartCalibration,
+            onConfirmCalibration = onConfirmCalibration,
+            onCancelCalibration = onCancelCalibration
         )
     }
 
@@ -234,20 +226,20 @@ fun CameraTab(
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // Alignment at the top
+        // Alignment card at top
         CameraAlignmentCard(
             sample = orientationSample.value,
-            target = targetAltAz
+            target = targetAltAz,
+            azOffsetDeg = azOffsetDeg,
+            altOffsetDeg = altOffsetDeg
         )
-
+        // Status message if present
         statusState.value?.let { msg ->
             ElevatedCard {
-                Column(Modifier.padding(12.dp)) {
-                    Text(msg, style = MaterialTheme.typography.bodyMedium)
-                }
+                Column(Modifier.padding(12.dp)) { Text(msg, style = MaterialTheme.typography.bodyMedium) }
             }
         }
-
+        // Error message if present
         errorState.value?.let { err ->
             ElevatedCard {
                 Column(Modifier.padding(12.dp)) {
@@ -257,8 +249,7 @@ fun CameraTab(
                 }
             }
         }
-
-        // Camera preview + overlays
+        // Camera preview and overlays
         Box(modifier = Modifier.fillMaxWidth()) {
             ElevatedCard(modifier = Modifier.fillMaxWidth()) {
                 Box(Modifier.fillMaxWidth().padding(10.dp)) {
@@ -281,20 +272,17 @@ fun CameraTab(
                                     }
                                     true
                                 }
-                            }.also { pv ->
-                                previewViewState.value = pv
-                            }
+                            }.also { pv -> previewViewState.value = pv }
                         }
                     )
-                    // ✅ Overlay message (on top of camera)
+                    // Overlay message over preview
                     val msg = overlayMessage.value
                     if (msg != null) {
-                        // auto-hide
+                        // Auto-hide overlay messages
                         LaunchedEffect(msg) {
                             delay(1500)
                             overlayMessage.value = null
                         }
-
                         Surface(
                             modifier = Modifier
                                 .align(Alignment.TopCenter)
@@ -309,11 +297,11 @@ fun CameraTab(
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                                 style = MaterialTheme.typography.bodyMedium
                             )
-
-                        }}}
+                        }
+                    }
+                }
             }
-
-            // Fullscreen icon (top-right) — floating over preview
+            // Fullscreen icon
             FloatingIconButton(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
@@ -322,8 +310,7 @@ fun CameraTab(
                 contentDesc = "Full screen",
                 onClick = { showFullScreen.value = true }
             )
-
-            // Quick-controls icon (bottom-right) — opens tiny popup
+            // Quick controls icon
             FloatingIconButton(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -336,8 +323,7 @@ fun CameraTab(
                     pingQuickControls()
                 }
             )
-
-            // Floating shutter always visible
+            // Floating shutter button
             ShutterFab(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -347,7 +333,6 @@ fun CameraTab(
                 onClick = {
                     val cap = imageCaptureState.value ?: return@ShutterFab
                     scope.launch {
-                        //statusState.value = "Saving photo…"
                         val uri = takePhotoToMediaStore(
                             context = context,
                             imageCapture = cap,
@@ -357,8 +342,7 @@ fun CameraTab(
                     }
                 }
             )
-
-            // ✅ Explicit receiver to avoid the ColumnScope overload confusion
+            // Quick controls popup
             androidx.compose.animation.AnimatedVisibility(
                 visible = showQuickControls.value,
                 enter = fadeIn(),
@@ -366,7 +350,7 @@ fun CameraTab(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .windowInsetsPadding(WindowInsets.navigationBars)
-                    .padding(bottom = 76.dp) // sits above shutter
+                    .padding(bottom = 76.dp)
             ) {
                 QuickControlsPopup(
                     camera = cameraState.value,
@@ -396,9 +380,22 @@ fun CameraTab(
                     }
                 )
             }
+            // Calibration overlay: shows only when calibrating and target is available
+            if (isCalibrating && targetAltAz != null) {
+                CalibrationOverlay(
+                    onConfirm = {
+                        val sample = orientationSample.value
+                        if (sample != null) {
+                            onConfirmCalibration?.invoke(sample, targetAltAz)
+                        }
+                    },
+                    onCancel = {
+                        onCancelCalibration?.invoke()
+                    }
+                )
+            }
         }
-
-        // Bottom row (wrap content)
+        // Bottom row: back, status clear, calibrate
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -410,6 +407,10 @@ fun CameraTab(
             if (statusState.value != null) {
                 TextButton(onClick = { statusState.value = null }) { Text("Clear") }
             }
+            // Show calibrate button when not calibrating and we have a target and callback
+            if (!isCalibrating && onStartCalibration != null && targetAltAz != null) {
+                TextButton(onClick = { onStartCalibration() }) { Text("Calibrate") }
+            }
         }
     }
 }
@@ -417,26 +418,27 @@ fun CameraTab(
 @Composable
 private fun CameraAlignmentCard(
     sample: OrientationTracker.OrientationSample?,
-    target: TargetAltAz?
+    target: TargetAltAz?,
+    azOffsetDeg: Double,
+    altOffsetDeg: Double
 ) {
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Alignment", style = MaterialTheme.typography.titleMedium)
-
             if (target == null) {
                 Text("Select a NEO in Results, then return here to aim.", style = MaterialTheme.typography.bodySmall)
                 if (sample == null) Text("Waiting for sensors…", style = MaterialTheme.typography.bodySmall)
                 return@Column
             }
-
             Text(target.label, style = MaterialTheme.typography.bodySmall)
-
             if (sample == null) {
                 Text("Waiting for sensors…", style = MaterialTheme.typography.bodySmall)
             } else {
-                val dAz = OrientationMath.deltaAngleDeg(sample.azimuthDegTrue, target.azimuthDegTrue)
-                val dAlt = target.altitudeDeg - sample.altitudeDegCamera
-
+                // Apply calibration offsets to sample
+                val correctedAz = sample.azimuthDegTrue + azOffsetDeg
+                val correctedAlt = sample.altitudeDegCamera + altOffsetDeg
+                val dAz = OrientationMath.deltaAngleDeg(correctedAz, target.azimuthDegTrue)
+                val dAlt = target.altitudeDeg - correctedAlt
                 val aligned = abs(dAz) < 3.0 && abs(dAlt) < 3.0
                 Text(
                     if (aligned) "✅ Aligned" else OrientationMath.aimHint(dAz, dAlt),
@@ -508,7 +510,6 @@ private fun QuickControlsPopup(
     val zs = camera?.cameraInfo?.zoomState?.value
     val exp = camera?.cameraInfo?.exposureState
     val expSupported = exp?.isExposureCompensationSupported == true
-
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = Color.Black.copy(alpha = 0.55f),
@@ -530,8 +531,7 @@ private fun QuickControlsPopup(
                     Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
                 }
             }
-
-            // Zoom
+            // Zoom control
             if (zs == null) {
                 Text("Zoom: starting…", color = Color.White, style = MaterialTheme.typography.bodySmall)
             } else {
@@ -542,8 +542,7 @@ private fun QuickControlsPopup(
                     valueRange = zs.minZoomRatio..zs.maxZoomRatio
                 )
             }
-
-            // Exposure comp
+            // Exposure compensation control
             if (!expSupported || exp == null) {
                 Text("Exposure comp: not supported", color = Color.White, style = MaterialTheme.typography.bodySmall)
             } else {
@@ -582,13 +581,11 @@ private suspend fun takePhotoToMediaStore(
             put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/NEOPlanner")
         }
     }
-
     val outputOptions = ImageCapture.OutputFileOptions.Builder(
         context.contentResolver,
         MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
         contentValues
     ).build()
-
     suspendTakePicture(imageCapture, outputOptions, executor)
 }
 
@@ -604,7 +601,6 @@ private suspend fun suspendTakePicture(
             override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
                 if (!cont.isCompleted) cont.resume(outputFileResults.savedUri)
             }
-
             override fun onError(exception: ImageCaptureException) {
                 Log.e("CameraTab", "Photo capture failed", exception)
                 if (!cont.isCompleted) cont.resume(null)

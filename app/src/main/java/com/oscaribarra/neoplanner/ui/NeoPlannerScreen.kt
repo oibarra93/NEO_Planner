@@ -1,7 +1,6 @@
 package com.oscaribarra.neoplanner.ui
 
 import android.Manifest
-import androidx.compose.ui.tooling.preview.Preview
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -44,8 +43,15 @@ import com.oscaribarra.neoplanner.ui.tabs.ResultsTab
 import com.oscaribarra.neoplanner.ui.tabs.SettingsSheet
 import java.time.format.DateTimeFormatter
 
+/**
+ * Top-level screen composable orchestrating the Planner, Results, Pointing and Camera
+ * tabs.  This screen observes state from [NeoPlannerViewModel] and passes
+ * appropriate callbacks and data down to each tab.  It also wires up
+ * permission requests and settings, and constructs the target for pointing
+ * and camera views based on the selected NEO, Moon, or planet.
+ */
 private enum class MainTab { Planner, Results, Pointing, Camera }
-@Preview
+
 @RequiresApi(Build.VERSION_CODES.O)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -54,57 +60,69 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
 
+    // Launchers for requesting permissions at runtime
     val permissionLauncherLocation = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted: Boolean ->
         vm.setHasLocationPermission(granted)
     }
-
     val permissionLauncherCamera = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
-    ) { _: Boolean -> /* no-op */ }
+    ) { _: Boolean ->
+        // no-op: camera permission result handled implicitly
+    }
 
-    val timeFmt = remember { DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm z") }
-
+    val timeFmt = remember {
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm z")
+    }
     var tab by remember { mutableStateOf(MainTab.Planner) }
     var mode by remember { mutableStateOf(ResultsMode.Planned) }
     var plannedSort by remember { mutableStateOf(PlannedSort.BestPeakAlt) }
     var showSettings by remember { mutableStateOf(false) }
 
-    // Auto-refresh Moon when observer becomes available
+    // When observer becomes available or changes, refresh the Moon position
     LaunchedEffect(st.observer?.timeZoneId, st.observer?.latitudeDeg, st.observer?.longitudeDeg) {
         vm.refreshMoonIfPossible()
     }
 
-    // Selected planned result (if any)
+    // Determine the currently selected planned result, if any
     val selectedPlanned = remember(st.planned, st.selectedNeoId) {
         st.planned.firstOrNull { it.neo.id == st.selectedNeoId }
     }
-
-    // Selected planet target (if any) from ViewModel state
+    // Determine the selected planet target from the ViewModel state
     val selectedPlanetTarget: TargetAltAz? = remember(st.selectedPlanetCommand, st.planetTargets) {
         val cmd = st.selectedPlanetCommand ?: return@remember null
         st.planetTargets[cmd]
     }
-
-    // Build target for Pointing/Camera tabs
+    // Compute the target to use for pointing/camera guidance
     val pointingTarget: TargetAltAz? = remember(
-        st.selectedNeoId, selectedPlanned, st.moonTarget,
-        st.selectedPlanetCommand, selectedPlanetTarget
+        st.selectedNeoId,
+        selectedPlanned,
+        st.moonTarget,
+        st.selectedPlanetCommand,
+        selectedPlanetTarget
     ) {
         when {
+            // If user has selected the Moon in Results, use Moon target
             st.selectedNeoId == "MOON" -> st.moonTarget
+            // If a planet is selected, use the stored planet target
             selectedPlanetTarget != null -> selectedPlanetTarget
             else -> {
+                // Otherwise derive from selected planned NEO
                 val p = selectedPlanned ?: return@remember null
                 val alt = p.peakAltitudeDeg ?: return@remember null
                 val az = p.peakAzimuthDeg ?: return@remember null
                 val whenStr = p.peakTimeLocal?.format(timeFmt) ?: "peak time"
-                TargetAltAz("${p.neo.name} • $whenStr", alt, az)
+                TargetAltAz(
+                    label = "${p.neo.name} • $whenStr",
+                    altitudeDeg = alt,
+                    azimuthDegTrue = az
+                )
             }
         }
     }
 
+    // Show settings bottom sheet when requested
     if (showSettings) {
         ModalBottomSheet(onDismissRequest = { showSettings = false }) {
             SettingsSheet(
@@ -137,6 +155,7 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
                 .fillMaxSize()
                 .padding(padding)
         ) {
+            // Tab row for switching between Planner, Results, Pointing and Camera
             PrimaryTabRow(selectedTabIndex = tab.ordinal) {
                 Tab(
                     selected = tab == MainTab.Planner,
@@ -159,7 +178,7 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
                     text = { Text("Camera") }
                 )
             }
-
+            // Switch content based on selected tab
             when (tab) {
                 MainTab.Planner -> PlannerTab(
                     st = st,
@@ -167,6 +186,7 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
                     selected = selectedPlanned,
                     onFetch = vm::fetchNeosNow,
                     onPlan = {
+                        // Run plan visibility and switch to Results tab
                         vm.planVisibility(
                             appContext = context.applicationContext,
                             req = PlanRequest(
@@ -185,7 +205,6 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
                     onUpdateTwilight = vm::updateTwilightLimitDeg,
                     onUpdateMaxNeos = vm::updateMaxNeos
                 )
-
                 MainTab.Results -> ResultsTab(
                     st = st,
                     timeFmt = timeFmt,
@@ -205,10 +224,9 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
                     onOpenNeoDetails = { id ->
                         uriHandler.openUri("https://ssd.jpl.nasa.gov/tools/sbdb_lookup.html#/?sstr=$id")
                     },
-                    selectedPlanetCommand = st.selectedPlanetCommand,      // <-- pass ViewModel state down
-                    onSelectPlanet = { cmd -> vm.selectPlanet(cmd) }       // <-- update ViewModel when user picks a planet
+                    selectedPlanetCommand = st.selectedPlanetCommand,
+                    onSelectPlanet = { cmd -> vm.selectPlanet(cmd) }
                 )
-
                 MainTab.Pointing -> {
                     val obs = st.observer
                     PointingTab(
@@ -220,10 +238,11 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
                         onOpenCameraTab = {
                             permissionLauncherCamera.launch(Manifest.permission.CAMERA)
                             tab = MainTab.Camera
-                        }
+                        },
+                        azOffsetDeg = st.azOffsetDeg,
+                        altOffsetDeg = st.altOffsetDeg
                     )
                 }
-
                 MainTab.Camera -> {
                     val obs = st.observer
                     CameraTab(
@@ -231,7 +250,13 @@ fun NeoPlannerScreen(vm: NeoPlannerViewModel) {
                         obsLonDeg = obs?.longitudeDeg,
                         obsHeightMeters = obs?.elevationMeters,
                         targetAltAz = pointingTarget,
-                        onBackToResults = { tab = MainTab.Results }
+                        onBackToResults = { tab = MainTab.Results },
+                        azOffsetDeg = st.azOffsetDeg,
+                        altOffsetDeg = st.altOffsetDeg,
+                        isCalibrating = st.isCalibrating,
+                        onStartCalibration = { vm.startCalibration() },
+                        onConfirmCalibration = { sample, target -> vm.completeCalibration(sample, target) },
+                        onCancelCalibration = { vm.cancelCalibration() }
                     )
                 }
             }
